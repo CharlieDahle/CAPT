@@ -76,9 +76,14 @@ struct Track : public juce::Component
         nameLabel.setText (trackName, juce::dontSendNotification);
         addAndMakeVisible (nameLabel);
 
-        recordButton.setButtonText ("Record");
-        addAndMakeVisible (recordButton);
-        recordButton.onClick = [this] { recordButtonClicked(); };
+        armButton.setButtonText ("Arm");
+        addAndMakeVisible (armButton);
+        armButton.onClick = [this]
+        {
+            auto newArmed = ! armed.load();
+            armed.store (newArmed);
+            armButton.setButtonText (newArmed ? "Armed" : "Arm");
+        };
 
         volumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
         volumeSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 40, 20);
@@ -102,18 +107,30 @@ struct Track : public juce::Component
         synth.setCurrentPlaybackSampleRate (sampleRate);
     }
 
-    void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples)
+    void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
+                           TransportState globalState, double elapsedSamples)
     {
-        auto desiredState = requestedState.load();
-        if (desiredState != currentState)
-        {
-            if (desiredState == TransportState::Recording)
-                numRecordedEvents = 0;
-            else if (desiredState == TransportState::Playing)
-                nextPlaybackIndex = 0;
+        auto isArmed = armed.load();
+        auto effectiveMode = globalState;
 
-            elapsedSamples = 0.0;
-            currentState = desiredState;
+        if (globalState == TransportState::Recording && ! isArmed)
+            effectiveMode = TransportState::Playing;
+
+        if (effectiveMode != previousEffectiveMode)
+        {
+            // Any note that was mid-hold when the mode changed (transport
+            // stopped, or arm toggled mid-recording) never gets its
+            // matching note-off, since that came from playback/recording
+            // logic that's about to stop running - so tell the synth
+            // directly, or the voice would hold forever.
+            synth.allNotesOff (1, false);
+
+            if (effectiveMode == TransportState::Playing)
+                nextPlaybackIndex = 0;
+            else if (effectiveMode == TransportState::Recording)
+                numRecordedEvents = 0;
+
+            previousEffectiveMode = effectiveMode;
         }
 
         juce::MidiBuffer liveMidi;
@@ -121,7 +138,7 @@ struct Track : public juce::Component
 
         juce::MidiBuffer midiForSynth;
 
-        if (currentState == TransportState::Playing)
+        if (effectiveMode == TransportState::Playing)
         {
             while (nextPlaybackIndex < numRecordedEvents)
             {
@@ -140,19 +157,13 @@ struct Track : public juce::Component
                 midiForSynth.addEvent (message, samplePosition);
                 ++nextPlaybackIndex;
             }
-
-            if (nextPlaybackIndex >= numRecordedEvents)
-            {
-                currentState = TransportState::Idle;
-                requestedState.store (TransportState::Idle);
-            }
         }
         else
         {
             midiForSynth = liveMidi;
         }
 
-        if (currentState == TransportState::Recording)
+        if (effectiveMode == TransportState::Recording)
         {
             for (const auto metadata : liveMidi)
             {
@@ -172,15 +183,58 @@ struct Track : public juce::Component
         }
 
         synth.renderNextBlock (buffer, midiForSynth, startSample, numSamples);
-
-        elapsedSamples += numSamples;
     }
 
     float getVolume() const { return volume.load(); }
 
-    void setPlaying (bool shouldPlay)
+    double getLastEventTimeSamples() const
     {
-        requestedState.store (shouldPlay ? TransportState::Playing : TransportState::Idle);
+        auto count = numRecordedEvents.load();
+        return count > 0 ? recordedEvents[(size_t) (count - 1)].timeStampSamples : 0.0;
+    }
+
+    std::unique_ptr<juce::XmlElement> toXml() const
+    {
+        auto trackXml = std::make_unique<juce::XmlElement> ("TRACK");
+        trackXml->setAttribute ("volume", (double) volume.load());
+
+        auto count = numRecordedEvents.load();
+
+        for (int i = 0; i < count; ++i)
+        {
+            const auto& event = recordedEvents[(size_t) i];
+            auto* eventXml = trackXml->createNewChildElement ("EVENT");
+            eventXml->setAttribute ("time", event.timeStampSamples);
+            eventXml->setAttribute ("note", event.noteNumber);
+            eventXml->setAttribute ("velocity", (double) event.velocity);
+            eventXml->setAttribute ("on", event.isNoteOn);
+        }
+
+        return trackXml;
+    }
+
+    void fromXml (const juce::XmlElement& trackXml)
+    {
+        auto newVolume = (float) trackXml.getDoubleAttribute ("volume", 0.8);
+        volume.store (newVolume);
+        volumeSlider.setValue (newVolume, juce::dontSendNotification);
+
+        int count = 0;
+
+        for (auto* eventXml : trackXml.getChildIterator())
+        {
+            if (count >= maxRecordedEvents)
+                break;
+
+            auto& slot = recordedEvents[(size_t) count];
+            slot.timeStampSamples = eventXml->getDoubleAttribute ("time");
+            slot.noteNumber = eventXml->getIntAttribute ("note");
+            slot.velocity = (float) eventXml->getDoubleAttribute ("velocity");
+            slot.isNoteOn = eventXml->getBoolAttribute ("on");
+            ++count;
+        }
+
+        numRecordedEvents.store (count);
     }
 
     void resized() override
@@ -190,54 +244,55 @@ struct Track : public juce::Component
 
         auto topRow = area.removeFromTop (30);
         nameLabel.setBounds (topRow.removeFromLeft (80));
-        recordButton.setBounds (topRow.removeFromLeft (100).reduced (3));
+        armButton.setBounds (topRow.removeFromLeft (100).reduced (3));
         volumeSlider.setBounds (topRow.reduced (3));
     }
 
 private:
-    void recordButtonClicked()
-    {
-        if (requestedState.load() == TransportState::Recording)
-        {
-            requestedState.store (TransportState::Idle);
-            recordButton.setButtonText ("Record");
-        }
-        else
-        {
-            requestedState.store (TransportState::Recording);
-            recordButton.setButtonText ("Stop Recording");
-        }
-    }
-
     juce::Label nameLabel;
     juce::MidiKeyboardState keyboardState;
     juce::MidiKeyboardComponent keyboardComponent;
     juce::Synthesiser synth;
-    juce::TextButton recordButton;
+    juce::TextButton armButton;
     juce::Slider volumeSlider;
 
     std::atomic<float> volume { 0.8f };
-    std::atomic<TransportState> requestedState { TransportState::Idle };
+    std::atomic<bool> armed { false };
 
-    TransportState currentState = TransportState::Idle;
-    double elapsedSamples = 0.0;
     int nextPlaybackIndex = 0;
+    TransportState previousEffectiveMode = TransportState::Idle;
 
     static constexpr int maxRecordedEvents = 4096;
     std::array<RecordedNoteEvent, maxRecordedEvents> recordedEvents;
-    int numRecordedEvents = 0;
+    std::atomic<int> numRecordedEvents { 0 };
 };
 
-class MainComponent : public juce::AudioAppComponent
+class MainComponent : public juce::AudioAppComponent,
+                       private juce::Timer
 {
 public:
     static constexpr int numTracks = 4;
 
     MainComponent()
     {
-        globalPlayButton.setButtonText ("Play");
-        addAndMakeVisible (globalPlayButton);
-        globalPlayButton.onClick = [this] { globalPlayButtonClicked(); };
+        recordButton.setButtonText ("Record");
+        addAndMakeVisible (recordButton);
+        recordButton.onClick = [this] { recordButtonClicked(); };
+
+        playButton.setButtonText ("Play");
+        addAndMakeVisible (playButton);
+        playButton.onClick = [this] { playButtonClicked(); };
+
+        saveButton.setButtonText ("Save");
+        addAndMakeVisible (saveButton);
+        saveButton.onClick = [this] { saveButtonClicked(); };
+
+        loadButton.setButtonText ("Load");
+        addAndMakeVisible (loadButton);
+        loadButton.onClick = [this] { loadButtonClicked(); };
+
+        timeLabel.setText ("0:00 / 0:00", juce::dontSendNotification);
+        addAndMakeVisible (timeLabel);
 
         for (int i = 0; i < numTracks; ++i)
         {
@@ -249,15 +304,19 @@ public:
         setSize (700, 740);
 
         setAudioChannels (0, 2);
+        startTimerHz (4);
     }
 
     ~MainComponent() override
     {
+        stopTimer();
         shutdownAudio();
     }
 
     void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override
     {
+        currentSampleRate = sampleRate;
+
         for (auto& track : tracks)
             track->prepareToPlay (sampleRate);
 
@@ -268,8 +327,23 @@ public:
     {
         bufferToFill.clearActiveBufferRegion();
 
+        auto desiredState = requestedState.load();
+        auto transitioned = (desiredState != currentState);
+        auto elapsedNow = elapsedSamples.load();
+
+        if (transitioned)
+        {
+            elapsedNow = 0.0;
+            currentState = desiredState;
+        }
+
         for (auto& track : tracks)
-            mixTrackIntoOutput (*track, bufferToFill);
+            mixTrackIntoOutput (*track, bufferToFill, currentState, elapsedNow);
+
+        if (currentState != TransportState::Idle)
+            elapsedSamples.store (elapsedNow + bufferToFill.numSamples);
+        else
+            elapsedSamples.store (0.0);
     }
 
     void releaseResources() override {}
@@ -282,7 +356,12 @@ public:
     void resized() override
     {
         auto area = getLocalBounds();
-        globalPlayButton.setBounds (area.removeFromTop (40).reduced (5));
+        auto topRow = area.removeFromTop (40);
+        recordButton.setBounds (topRow.removeFromLeft (90).reduced (5));
+        playButton.setBounds (topRow.removeFromLeft (90).reduced (5));
+        saveButton.setBounds (topRow.removeFromLeft (90).reduced (5));
+        loadButton.setBounds (topRow.removeFromLeft (90).reduced (5));
+        timeLabel.setBounds (topRow.removeFromLeft (120).reduced (5));
 
         auto rowHeight = area.getHeight() / numTracks;
 
@@ -291,20 +370,114 @@ public:
     }
 
 private:
-    void globalPlayButtonClicked()
+    void timerCallback() override
     {
-        isPlaying = ! isPlaying;
+        auto elapsedSeconds = elapsedSamples.load() / currentSampleRate;
 
+        double totalSeconds = 0.0;
         for (auto& track : tracks)
-            track->setPlaying (isPlaying);
+            totalSeconds = juce::jmax (totalSeconds, track->getLastEventTimeSamples() / currentSampleRate);
 
-        globalPlayButton.setButtonText (isPlaying ? "Stop" : "Play");
+        timeLabel.setText (formatTime (elapsedSeconds) + " / " + formatTime (totalSeconds),
+                            juce::dontSendNotification);
     }
 
-    void mixTrackIntoOutput (Track& track, const juce::AudioSourceChannelInfo& bufferToFill)
+    static juce::String formatTime (double seconds)
+    {
+        auto totalWholeSeconds = (int) seconds;
+        auto minutes = totalWholeSeconds / 60;
+        auto secs = totalWholeSeconds % 60;
+        return juce::String (minutes) + ":" + (secs < 10 ? "0" : "") + juce::String (secs);
+    }
+
+    void recordButtonClicked()
+    {
+        if (requestedState.load() == TransportState::Recording)
+        {
+            requestedState.store (TransportState::Idle);
+            recordButton.setButtonText ("Record");
+        }
+        else
+        {
+            requestedState.store (TransportState::Recording);
+            recordButton.setButtonText ("Stop Recording");
+            playButton.setButtonText ("Play");
+        }
+    }
+
+    void playButtonClicked()
+    {
+        if (requestedState.load() == TransportState::Playing)
+        {
+            requestedState.store (TransportState::Idle);
+            playButton.setButtonText ("Play");
+        }
+        else
+        {
+            requestedState.store (TransportState::Playing);
+            playButton.setButtonText ("Stop");
+            recordButton.setButtonText ("Record");
+        }
+    }
+
+    void saveButtonClicked()
+    {
+        fileChooser = std::make_unique<juce::FileChooser> ("Save Project", juce::File(), "*.captproj");
+
+        auto flags = juce::FileBrowserComponent::saveMode
+                   | juce::FileBrowserComponent::canSelectFiles
+                   | juce::FileBrowserComponent::warnAboutOverwriting;
+
+        fileChooser->launchAsync (flags, [this] (const juce::FileChooser& chooser)
+        {
+            auto file = chooser.getResult();
+            if (file == juce::File())
+                return;
+
+            juce::XmlElement root ("CAPT_PROJECT");
+
+            for (auto& track : tracks)
+                root.addChildElement (track->toXml().release());
+
+            root.writeTo (file);
+        });
+    }
+
+    void loadButtonClicked()
+    {
+        fileChooser = std::make_unique<juce::FileChooser> ("Load Project", juce::File(), "*.captproj");
+
+        auto flags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+        fileChooser->launchAsync (flags, [this] (const juce::FileChooser& chooser)
+        {
+            auto file = chooser.getResult();
+            if (file == juce::File())
+                return;
+
+            auto xml = juce::XmlDocument::parse (file);
+            if (xml == nullptr)
+                return;
+
+            int index = 0;
+
+            for (auto* trackXml : xml->getChildIterator())
+            {
+                if (index >= (int) tracks.size())
+                    break;
+
+                tracks[(size_t) index]->fromXml (*trackXml);
+                ++index;
+            }
+        });
+    }
+
+    void mixTrackIntoOutput (Track& track, const juce::AudioSourceChannelInfo& bufferToFill,
+                              TransportState globalState, double transportElapsedSamples)
     {
         scratchBuffer.clear (0, bufferToFill.numSamples);
-        track.renderNextBlock (scratchBuffer, 0, bufferToFill.numSamples);
+        track.renderNextBlock (scratchBuffer, 0, bufferToFill.numSamples,
+                                globalState, transportElapsedSamples);
 
         auto gain = track.getVolume();
 
@@ -316,8 +489,14 @@ private:
         }
     }
 
-    juce::TextButton globalPlayButton;
-    bool isPlaying = false;
+    juce::TextButton recordButton, playButton, saveButton, loadButton;
+    juce::Label timeLabel;
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
+    std::atomic<TransportState> requestedState { TransportState::Idle };
+    TransportState currentState = TransportState::Idle;
+    std::atomic<double> elapsedSamples { 0.0 };
+    double currentSampleRate = 44100.0;
 
     std::vector<std::unique_ptr<Track>> tracks;
     juce::AudioBuffer<float> scratchBuffer;
