@@ -65,9 +65,14 @@ private:
 enum class TransportState { Idle, Recording, Playing };
 enum class TrackType { Midi, Audio };
 
-// Shared horizontal timeline scale for the piano roll and the playhead, so
-// a note drawn at a given x lines up with the playhead when it gets there.
+// Shared by the piano roll and the playhead so a note lines up with the
+// playhead when it gets there.
 constexpr double kPixelsPerSecond = 60.0;
+
+// Reserved unconditionally, even collapsed where no keys are drawn, so
+// time-zero sits at the same x in every track state - the playhead is drawn
+// once globally at a single shared x.
+constexpr float kKeyboardStripWidth = 30.0f;
 
 struct RecordedNoteEvent
 {
@@ -77,6 +82,40 @@ struct RecordedNoteEvent
     bool isNoteOn = false;
 };
 
+// A small round toggle button drawn as a filled/outline circle with an
+// optional single-character label - used for the per-track mute/solo/select
+// buttons that live in the piano-key gutter.
+class IconToggleButton : public juce::Button
+{
+public:
+    IconToggleButton (juce::String iconText, juce::Colour activeColourToUse)
+        : juce::Button ({}), text (std::move (iconText)), activeColour (activeColourToUse)
+    {
+    }
+
+    void paintButton (juce::Graphics& g, bool isHighlighted, bool /*isDown*/) override
+    {
+        auto bounds = getLocalBounds().toFloat().reduced (3.0f);
+        auto active = getToggleState();
+
+        g.setColour (active ? activeColour : juce::Colours::white.withAlpha (isHighlighted ? 0.2f : 0.08f));
+        g.fillEllipse (bounds);
+        g.setColour (juce::Colours::white.withAlpha (0.5f));
+        g.drawEllipse (bounds, 1.0f);
+
+        if (text.isNotEmpty())
+        {
+            g.setColour (active ? juce::Colours::black : juce::Colours::white.withAlpha (0.8f));
+            g.setFont (juce::Font (juce::FontOptions (11.0f, juce::Font::bold)));
+            g.drawText (text, getLocalBounds(), juce::Justification::centred);
+        }
+    }
+
+private:
+    juce::String text;
+    juce::Colour activeColour;
+};
+
 class TrackBase : public juce::Component
 {
 public:
@@ -84,71 +123,76 @@ public:
         : trackType (type)
     {
         nameLabel.setText (trackName, juce::dontSendNotification);
-        // Let clicks on the name pass through to this component's own
-        // mouseDown() so clicking the "Track X" text selects the track.
         nameLabel.setInterceptsMouseClicks (false, false);
         addAndMakeVisible (nameLabel);
+
+        muteButton.setClickingTogglesState (true);
+        muteButton.onClick = [this] { muted.store (muteButton.getToggleState()); };
+        addAndMakeVisible (muteButton);
+
+        soloButton.setClickingTogglesState (true);
+        soloButton.onClick = [this] { soloed.store (soloButton.getToggleState()); };
+        addAndMakeVisible (soloButton);
+
+        selectButton.setClickingTogglesState (false);
+        selectButton.onClick = [this] { if (onSelected) onSelected(); };
+        addAndMakeVisible (selectButton);
     }
 
     ~TrackBase() override = default;
 
     virtual void prepareToPlay (double sampleRate) = 0;
 
-    // inputBuffer holds this block's raw microphone input (nullptr if no
-    // input device is available); only AudioTrack makes use of it.
+    // inputBuffer is this block's raw mic input, nullptr if unavailable;
+    // only AudioTrack uses it.
     virtual void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
                                    TransportState globalState, double elapsedSamples,
                                    const juce::AudioBuffer<const float>* inputBuffer) = 0;
 
     virtual double getLastEventTimeSamples() const = 0;
 
-    // audioFolder is where any recorded audio should be written/read from
-    // (e.g. "<project>_Audio/"); tracks with nothing to persist there just
-    // ignore it.
     virtual std::unique_ptr<juce::XmlElement> toXml (const juce::File& audioFolder) const = 0;
     virtual void fromXml (const juce::XmlElement& trackXml, const juce::File& audioFolder) = 0;
 
-    // Only meaningful for tracks that accept live MIDI input; other track
-    // types just ignore simulated notes.
     virtual void injectTestNote (int /*noteNumber*/, float /*velocity*/, bool /*isNoteOn*/) {}
 
     float getVolume() const { return volume.load(); }
     void setVolume (float newVolume) { volume.store (newVolume); }
     bool isArmed() const { return armed.load(); }
     void setArmed (bool newArmed) { armed.store (newArmed); }
+    bool isMuted() const { return muted.load(); }
+    bool isSoloed() const { return soloed.load(); }
     TrackType getType() const { return trackType; }
     juce::String getTrackName() const { return nameLabel.getText(); }
 
     void setSelected (bool newSelected)
     {
         selected = newSelected;
+        selectButton.setToggleState (selected, juce::dontSendNotification);
         selectionChanged (selected);
         repaint();
     }
 
     bool isSelected() const { return selected; }
 
-    // Only one track is expanded at a time; the owner (MainComponent)
-    // enforces that and calls this on every track when it changes.
+    // Only one track is expanded at a time - the owner calls this on every
+    // track when it changes. The mute/solo/select buttons live in the same
+    // gutter the piano keys use when expanded, so they only show up
+    // collapsed.
     void setExpanded (bool newExpanded)
     {
         expanded = newExpanded;
+        muteButton.setVisible (! expanded);
+        soloButton.setVisible (! expanded);
+        selectButton.setVisible (! expanded);
         expandedChanged (expanded);
         repaint();
     }
 
     bool isExpanded() const { return expanded; }
 
-    // Set by whoever owns this track (the slot it lives in decides how to
-    // react - e.g. by replacing it with a track of the other type).
     std::function<void()> onTypeToggleRequested;
-
-    // Fired when the lane is clicked, so the owner can make this the
-    // selected track (and show it in the inspector panel below).
     std::function<void()> onSelected;
-
-    // Fired to ask the owner to toggle whether this track is the expanded
-    // one (only one track can be expanded at a time).
     std::function<void()> onExpandToggleRequested;
 
     void paint (juce::Graphics& g) override
@@ -159,18 +203,21 @@ public:
             g.setColour (juce::Colours::white);
             g.drawRect (getLocalBounds());
         }
+
+        // Same reserved gutter as the piano roll below - keeps the left
+        // margin reading as space outside the track's box, not part of it.
+        g.setColour (juce::Colours::darkslategrey);
+        g.fillRect (0, 0, (int) kKeyboardStripWidth, 20);
     }
 
-    // Clicking the header always just selects - never expands, so a plain
-    // click never surprises you with a layout change.
+    // A plain click always just selects, never expands, so it never
+    // surprises you with a layout change.
     void mouseDown (const juce::MouseEvent&) override
     {
         if (onSelected)
             onSelected();
     }
 
-    // Double-clicking the header is the header's dedicated expand/collapse
-    // gesture, independent of whatever the lane's own content does.
     void mouseDoubleClick (const juce::MouseEvent&) override
     {
         if (onExpandToggleRequested)
@@ -180,23 +227,31 @@ public:
     void resized() final
     {
         auto area = getLocalBounds();
-        nameLabel.setBounds (area.removeFromTop (20));
+        auto headerArea = area.removeFromTop (20);
+        headerArea.removeFromLeft ((int) kKeyboardStripWidth);
+        nameLabel.setBounds (headerArea);
         resizedContent (area);
+
+        // Overlaid on the same gutter the content below draws into, so
+        // bring to front regardless of add order.
+        auto buttonColumn = area.removeFromLeft ((int) kKeyboardStripWidth);
+        auto buttonSize = juce::jmin (buttonColumn.getWidth(), buttonColumn.getHeight() / 3);
+        muteButton.setBounds (buttonColumn.removeFromTop (buttonSize));
+        soloButton.setBounds (buttonColumn.removeFromTop (buttonSize));
+        selectButton.setBounds (buttonColumn.removeFromTop (buttonSize));
+        muteButton.toFront (false);
+        soloButton.toFront (false);
+        selectButton.toFront (false);
     }
 
 protected:
-    // Subclasses lay out their own content (keyboard, waveform, ...) in the
-    // area below the name label.
     virtual void resizedContent (juce::Rectangle<int> contentArea) = 0;
 
-    // Hooks for subclasses whose content needs to react - e.g. MidiTrack's
-    // piano roll only edits notes while it's both selected and expanded.
     virtual void selectionChanged (bool /*isSelected*/) {}
     virtual void expandedChanged (bool /*isExpanded*/) {}
 
-    // For content that handles its own clicks (and so can't just rely on
-    // this component's mouseDown/mouseDoubleClick): first click selects,
-    // a click while already selected toggles expansion instead.
+    // For content that handles its own clicks: first click selects, a
+    // click while already selected toggles expansion instead.
     void selectOrToggleExpand()
     {
         if (! selected)
@@ -224,26 +279,26 @@ private:
     TrackType trackType;
 
     juce::Label nameLabel;
+    IconToggleButton muteButton { "M", juce::Colours::orangered };
+    IconToggleButton soloButton { "S", juce::Colours::gold };
+    IconToggleButton selectButton { {}, juce::Colours::white };
 
     std::atomic<float> volume { 0.8f };
     std::atomic<bool> armed { false };
+    std::atomic<bool> muted { false };
+    std::atomic<bool> soloed { false };
     bool selected = false;
     bool expanded = false;
 };
 
-// Draws a track's recorded MIDI notes as horizontal bars (pitch on the
-// y-axis, time on the x-axis) and lets them be drawn/moved/resized/deleted
-// with the mouse - but only while editableProvider says the transport is
-// idle. That restriction is what makes this safe without any locking: the
-// owning MidiTrack only touches its note storage from the audio thread
-// while actively recording/playing, and this view only mutates it (via
-// commit()) while that's guaranteed not to be happening.
+// Draws a track's recorded MIDI notes as horizontal bars, editable with the
+// mouse only while editableProvider says the transport is idle - that's
+// what makes this safe without locking, since the audio thread only touches
+// note storage while recording/playing.
 //
-// Has two rendering/interaction modes, switched by expandedFlag: collapsed
-// is a compact non-interactive thumbnail (whole pitch range squeezed into
-// whatever height it's given, no grid/keys); expanded uses a fixed, bigger
-// row height and relies on its owner (PianoRollView) placing it inside a
-// Viewport so you can scroll through the range.
+// Two modes, switched by expandedFlag: collapsed is a non-interactive
+// thumbnail; expanded uses a bigger fixed row height inside a Viewport
+// (owned by PianoRollView) so it can scroll through the pitch range.
 class PianoRollCanvas : public juce::Component, private juce::Timer
 {
 public:
@@ -264,9 +319,6 @@ public:
     void setEditCallback (std::function<void (std::vector<Note>)> callback) { editCallback = std::move (callback); }
     void setEditableProvider (std::function<bool()> provider) { editableProvider = std::move (provider); }
 
-    // Fired on a click that isn't editing a note - i.e. whenever this view
-    // isn't (yet) the selected-and-expanded one, so the click should just
-    // select/expand the track instead.
     void setLaneClickHandler (std::function<void()> handler) { laneClickHandler = std::move (handler); }
 
     void setSelectedFlag (bool newSelected) { selectedFlag = newSelected; }
@@ -312,6 +364,14 @@ public:
                 g.setColour (juce::Colours::darkred.withAlpha (0.15f));
                 g.fillRect (stripW, 0.0f, (float) getWidth() - stripW, (float) getHeight());
             }
+        }
+        else
+        {
+            // Same reserved gutter as the expanded view, just without keys.
+            g.setColour (juce::Colours::darkslategrey);
+            g.fillRect (0.0f, 0.0f, stripW, (float) getHeight());
+            g.setColour (juce::Colours::darkgrey.withAlpha (0.4f));
+            g.drawVerticalLine ((int) stripW, 0.0f, (float) getHeight());
         }
 
         for (auto& note : notes)
@@ -423,9 +483,8 @@ public:
             }
         }
 
-        // Not adjusting a note's velocity - fall through to the default
-        // handling, which is what forwards the wheel event up to the
-        // enclosing Viewport so it can actually scroll.
+        // Fall through so the event reaches the enclosing Viewport and it
+        // can actually scroll.
         Component::mouseWheelMove (e, wheel);
     }
 
@@ -458,11 +517,8 @@ private:
         return -1;
     }
 
-    // Collapsed: the whole pitch range is squeezed to fit whatever height
-    // this component has (a fixed-size thumbnail, never scrolled).
-    // Expanded: a fixed, bigger row height - the owning PianoRollView sizes
-    // this component tall enough to need scrolling and places it in a
-    // Viewport.
+    // Collapsed: pitch range squeezed to fit whatever height this has.
+    // Expanded: fixed bigger row height, tall enough to need scrolling.
     float rowHeight() const
     {
         if (expandedFlag)
@@ -471,7 +527,7 @@ private:
         return (float) juce::jmax (1, getHeight()) / (float) (highestNote - lowestNote + 1);
     }
 
-    float keyStripW() const { return expandedFlag ? keyboardStripWidth : 0.0f; }
+    float keyStripW() const { return kKeyboardStripWidth; }
 
     float noteTopY (int pitch) const
     {
@@ -529,19 +585,14 @@ private:
 
     void timerCallback() override
     {
-        // Skip entirely while hidden/minimized - nothing the user can see,
-        // so there's nothing worth re-pairing the note list or repainting
-        // for.
+        // Skip entirely while hidden/minimized - nothing to repaint.
         if (! isShowing())
             return;
 
-        // While idle, recordedEvents on the track only changes via an
-        // explicit edit here, which already repaints itself through
-        // commit() - so most of the time (transport stopped) this poll has
-        // nothing new to find. Skip the recurring pull, but always take one
-        // more snapshot on the transition into idle so a stale cache from
-        // the last few events at the tail of a recording doesn't linger
-        // (and so editing starts from up-to-date data).
+        // Idle recordedEvents only change via an explicit edit, which
+        // already repaints itself through commit() - so skip the recurring
+        // pull while idle, except once on the transition into idle so the
+        // tail end of a recording doesn't linger stale.
         auto isIdleNow = editableProvider != nullptr && editableProvider();
 
         if (isIdleNow && wasIdleLastTick)
@@ -549,11 +600,7 @@ private:
 
         wasIdleLastTick = isIdleNow;
 
-        // Don't clobber in-progress edits with a stale snapshot from the
-        // track - editableProvider already guarantees the two never
-        // overlap in practice (edits are only possible while idle, and
-        // the track only rewrites its own data while idle), but this
-        // keeps the view stable mid-drag regardless.
+        // Don't clobber an in-progress drag with a stale snapshot.
         if (draggingIndex < 0 && notesProvider != nullptr)
             notes = notesProvider();
 
@@ -576,16 +623,14 @@ private:
 
     static constexpr int lowestNote = 36;
     static constexpr int highestNote = 96;
-    static constexpr float keyboardStripWidth = 30.0f;
     static constexpr float fixedExpandedRowHeight = 16.0f;
 
     const juce::Colour backgroundColour { 0xfff2f0e9 };
     const juce::Colour noteColour { 0xffdb7d29 };
 };
 
-// Thin wrapper that places a PianoRollCanvas inside a Viewport, sizing the
-// canvas either to exactly fill this view (collapsed - nothing to scroll)
-// or to its full fixed-row-height content height (expanded - scrollable).
+// Places a PianoRollCanvas inside a Viewport, sizing it to fill the view
+// when collapsed or to its full scrollable content height when expanded.
 class PianoRollView : public juce::Component
 {
 public:
@@ -594,6 +639,11 @@ public:
     PianoRollView()
     {
         viewport.setViewedComponent (&canvas, false);
+
+        // No per-track horizontal scrolling - one shared timeline for the
+        // whole app; this viewport only scrolls vertically, through pitch.
+        viewport.setScrollBarsShown (true, false);
+
         addAndMakeVisible (viewport);
     }
 
@@ -609,8 +659,7 @@ public:
         canvas.setExpandedFlag (newExpanded);
         resized();
 
-        // Land somewhere in the middle of the range rather than at the
-        // very top (highest note) every time a track expands.
+        // Land in the middle of the range rather than at the top every time.
         if (expandedFlag)
             viewport.setViewPosition (0, juce::jmax (0, canvas.getHeight() / 2 - viewport.getHeight() / 2));
     }
@@ -648,9 +697,8 @@ public:
             synth.addVoice (new SineWaveVoice());
         synth.addSound (new SineWaveSound());
 
-        // Reserved up front so the push_back in renderNextBlock (real-time
-        // audio thread, during recording) never triggers a heap allocation -
-        // 128 covers every possible simultaneously-held MIDI pitch.
+        // Reserved so the push_back in renderNextBlock (audio thread, while
+        // recording) never allocates - 128 covers every possible held pitch.
         heldRecordingNotes.reserve (128);
     }
 
@@ -660,10 +708,9 @@ public:
         currentSampleRate = sampleRate;
     }
 
-    // Pairs the raw on/off event log into editor-friendly notes. Safe to
-    // call from the message thread: while the transport is idle (the only
-    // time the editor reads this) the audio thread never touches
-    // recordedEvents/numRecordedEvents.
+    // Pairs the raw on/off event log into editor-friendly notes. Safe from
+    // the message thread since the audio thread never touches
+    // recordedEvents/numRecordedEvents while idle, the only time this is read.
     std::vector<PianoRollView::Note> getRecordedNotesSnapshot() const
     {
         auto count = numRecordedEvents.load();
@@ -692,9 +739,8 @@ public:
         return notes;
     }
 
-    // Rewrites recordedEvents from a fully-edited note list. Only called
-    // (via the editor) while the transport is idle - see the class comment
-    // on PianoRollView for why that makes this safe without locking.
+    // Only called while idle - see the PianoRollCanvas class comment for
+    // why that makes this safe without locking.
     void setNotesFromEditor (const std::vector<PianoRollView::Note>& notes)
     {
         if (lastGlobalState.load() != TransportState::Idle)
@@ -733,16 +779,13 @@ public:
 
         if (effectiveMode != previousEffectiveMode)
         {
-            // Any note that was mid-hold when the mode changed (transport
-            // stopped, or arm toggled mid-recording) never gets its
-            // matching note-off, since that came from playback/recording
-            // logic that's about to stop running - so tell the synth
-            // directly, or the voice would hold forever.
+            // A note mid-hold when the mode changes never gets its matching
+            // note-off from playback/recording logic, since that's about to
+            // stop - tell the synth directly or the voice holds forever.
             synth.allNotesOff (1, false);
 
-            // If recording just stopped mid-note, the note-on already made
-            // it into recordedEvents but its note-off never will - close it
-            // out now so future playback doesn't hold the note forever.
+            // Recording stopped mid-note: the note-on made it into
+            // recordedEvents but the note-off never will - close it out now.
             if (previousEffectiveMode == TransportState::Recording)
                 closeOutHeldRecordingNotes (elapsedSamples);
 
@@ -911,9 +954,6 @@ private:
     std::vector<int> heldRecordingNotes;
 };
 
-// Simple horizontal bar that repaints itself from a live level value -
-// lets you see whether input is actually reaching a track's mic capture,
-// independent of whether you're recording.
 class LevelMeter : public juce::Component, private juce::Timer
 {
 public:
@@ -940,9 +980,8 @@ private:
     const std::atomic<float>& level;
 };
 
-// Records mono microphone input into an in-memory buffer and plays it back.
-// No waveform view yet (placeholder label stands in for it), and recordings
-// aren't persisted to disk yet - toXml()/fromXml() only round-trip volume.
+// Records mono microphone input into an in-memory buffer and plays it back;
+// persisted to a .wav alongside the project file. No waveform view yet.
 class AudioTrack : public TrackBase
 {
 public:
@@ -967,8 +1006,6 @@ public:
                            TransportState globalState, double elapsedSamples,
                            const juce::AudioBuffer<const float>* inputBuffer) override
     {
-        // Live input level, independent of transport state - lets you see
-        // whether the mic is picking anything up before/without recording.
         if (isArmed() && inputBuffer != nullptr && inputBuffer->getNumChannels() > 0)
         {
             auto* inputData = inputBuffer->getReadPointer (0, startSample);
@@ -1054,14 +1091,22 @@ public:
             recordedSamples.clear();
     }
 
+    void paint (juce::Graphics& g) override
+    {
+        TrackBase::paint (g);
+
+        g.setColour (juce::Colours::darkslategrey);
+        g.fillRect (0, 20, (int) kKeyboardStripWidth, getHeight() - 20);
+    }
+
 protected:
     void resizedContent (juce::Rectangle<int> contentArea) override
     {
-        juce::FlexBox column;
-        column.flexDirection = juce::FlexBox::Direction::column;
-        column.items.add (juce::FlexItem (levelMeter).withHeight (20).withMargin (2));
-        column.items.add (juce::FlexItem (placeholderLabel).withFlex (1));
-        column.performLayout (contentArea);
+        auto meterArea = contentArea.removeFromTop (24).reduced (2);
+        meterArea.removeFromLeft ((int) kKeyboardStripWidth);
+        levelMeter.setBounds (meterArea);
+
+        placeholderLabel.setBounds (contentArea);
     }
 
 private:
@@ -1204,8 +1249,8 @@ private:
     juce::uint32 startTimeMs = 0;
 };
 
-// Substitutes loaded-from-disk audio for live mic input for a while, so
-// AudioTrack recording can be exercised without needing to talk into a mic.
+// Substitutes loaded-from-disk audio for live mic input, so AudioTrack
+// recording can be exercised without talking into a mic.
 class AudioInputSimulator
 {
 public:
@@ -1219,8 +1264,6 @@ public:
 
     bool isActive() const { return active.load(); }
 
-    // Fills destination with the next numSamples of simulated audio
-    // (zero-padded once exhausted), deactivating itself when done.
     void fillNextBlock (float* destination, int numSamples)
     {
         const juce::ScopedLock lock (dataLock);
@@ -1239,10 +1282,8 @@ private:
     std::atomic<bool> active { false };
 };
 
-// Shows and edits the currently selected track's controls (arm, type,
-// volume) plus placeholders for features that don't exist yet (bus,
-// effects, sound selection) - one shared panel rather than each track
-// lane carrying its own full control set.
+// One shared panel for the selected track's controls, rather than each
+// track lane carrying its own full control set.
 class TrackInspector : public juce::Component
 {
 public:
@@ -1293,7 +1334,6 @@ public:
         showTrack (nullptr);
     }
 
-    // Pass nullptr to show an empty/disabled state (no track selected).
     void showTrack (TrackBase* track)
     {
         currentTrack = track;
@@ -1357,8 +1397,8 @@ private:
 };
 
 // Lays out the track lanes stacked vertically, giving the expanded one (if
-// any) extra height - this is the content component inside a Viewport, so
-// its total height can exceed what's actually visible.
+// any) extra height. Content component inside a Viewport, so its total
+// height can exceed what's actually visible.
 class TracksContainer : public juce::Component
 {
 public:
@@ -1366,7 +1406,15 @@ public:
     static constexpr int expandedHeight = 320;
 
     void attachTracks (std::vector<std::unique_ptr<TrackBase>>* tracksToUse) { tracksPtr = tracksToUse; }
-    void setExpandedIndex (int index) { expandedIndex = index; }
+
+    // Swapping which track is expanded leaves the total height unchanged,
+    // so the parent's setSize() call afterwards won't detect a bounds
+    // change and won't fire resized() for us - lay out directly here.
+    void setExpandedIndex (int index)
+    {
+        expandedIndex = index;
+        resized();
+    }
 
     int computeTotalHeight() const
     {
@@ -1444,6 +1492,7 @@ public:
 
         tracksContainer.attachTracks (&tracks);
         tracksViewport.setViewedComponent (&tracksContainer, false);
+        tracksViewport.setScrollBarsShown (true, false);
         addAndMakeVisible (tracksViewport);
 
         for (int i = 0; i < numTracks; ++i)
@@ -1460,22 +1509,18 @@ public:
 
         setSize (1000, 730);
 
-        // JUCE's CoreAudio backend opens the input device directly without
-        // ever calling AVFoundation's authorization API, so on some macOS
-        // versions the mic permission prompt never appears on its own -
-        // request it explicitly so the app shows up under Privacy &
-        // Security > Microphone and actually gets asked.
+        // JUCE's CoreAudio backend opens the input device without calling
+        // AVFoundation's authorization API, so the mic permission prompt
+        // doesn't reliably appear on its own - request it explicitly.
         requestMicrophonePermission ([] (bool /*granted*/) {});
 
-        // Mono mic input, stereo output.
         deviceManager.initialise (1, 2, nullptr, true);
 
         // Without an explicit request, the device keeps whatever buffer
-        // size CoreAudio's shared HAL setting currently has (which can be
-        // left over from some other low-latency audio app, e.g. as small as
-        // 16 samples/~0.36ms) - too small for the OS to service reliably,
-        // causing constant audio dropouts/crackle unrelated to anything
-        // this app does. Ask for a safe, comfortable buffer explicitly.
+        // size CoreAudio's shared HAL setting currently has - can be as
+        // small as 16 samples if left over from another low-latency audio
+        // app, too small for the OS to service reliably and a source of
+        // constant crackle unrelated to anything this app does.
         auto setup = deviceManager.getAudioDeviceSetup();
         setup.bufferSize = 512;
         deviceManager.setAudioDeviceSetup (setup, true);
@@ -1516,10 +1561,9 @@ public:
                                             float* const* outputChannelData, int numOutputChannels,
                                             int numSamples, const juce::AudioIODeviceCallbackContext&) override
     {
-        // Diagnostics only - std::chrono + relaxed atomics are real-time
-        // safe (no locks, no allocation, no I/O on this thread). The gap
-        // between callback starts catches the OS failing to schedule this
-        // thread on time; the duration catches our own code being slow.
+        // Diagnostics only - real-time safe (no locks/allocation/I-O here).
+        // Gap between callback starts catches the OS scheduling this thread
+        // late; duration catches our own code being slow.
         auto callbackStart = std::chrono::steady_clock::now();
 
         if (havePreviousCallbackStart)
@@ -1556,13 +1600,17 @@ public:
         }
 
         {
-            // Tracks can be replaced (type toggle, load) from the message
-            // thread while this runs, so guard the vector itself; the lock
-            // is only ever held briefly and uncontended in the common case.
+            // Tracks can be replaced from the message thread while this
+            // runs (type toggle, load), so guard the vector itself.
             const juce::ScopedLock lock (tracksLock);
 
+            bool anySoloed = false;
             for (auto& track : tracks)
-                mixTrackIntoOutput (*track, outputBuffer, numSamples, currentState, elapsedNow, &inputBuffer);
+                if (track->isSoloed())
+                    anySoloed = true;
+
+            for (auto& track : tracks)
+                mixTrackIntoOutput (*track, outputBuffer, numSamples, currentState, elapsedNow, &inputBuffer, anySoloed);
         }
 
         if (currentState != TransportState::Idle)
@@ -1589,7 +1637,7 @@ public:
             return;
 
         auto elapsedSeconds = elapsedSamples.load() / currentSampleRate;
-        auto x = tracksArea.getX() + (int) (elapsedSeconds * kPixelsPerSecond);
+        auto x = tracksArea.getX() + (int) kKeyboardStripWidth + (int) (elapsedSeconds * kPixelsPerSecond);
 
         if (x < tracksArea.getX() || x > tracksArea.getRight())
             return;
@@ -1666,7 +1714,7 @@ private:
         if (tracksArea.isEmpty())
             return;
 
-        auto x = tracksArea.getX() + (int) (elapsedSeconds * kPixelsPerSecond);
+        auto x = tracksArea.getX() + (int) kKeyboardStripWidth + (int) (elapsedSeconds * kPixelsPerSecond);
         auto previous = previousPlayheadX < 0 ? x : previousPlayheadX;
         auto lo = juce::jmin (x, previous) - 3;
         auto hi = juce::jmax (x, previous) + 3;
@@ -1886,12 +1934,13 @@ private:
 
     void mixTrackIntoOutput (TrackBase& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
                               TransportState globalState, double transportElapsedSamples,
-                              const juce::AudioBuffer<const float>* inputBuffer)
+                              const juce::AudioBuffer<const float>* inputBuffer, bool anySoloed)
     {
         scratchBuffer.clear (0, numSamples);
         track.renderNextBlock (scratchBuffer, 0, numSamples, globalState, transportElapsedSamples, inputBuffer);
 
-        auto gain = track.getVolume();
+        auto audible = ! track.isMuted() && (! anySoloed || track.isSoloed());
+        auto gain = audible ? track.getVolume() : 0.0f;
 
         for (int channel = 0; channel < outputBuffer.getNumChannels(); ++channel)
             outputBuffer.addFrom (channel, 0, scratchBuffer, channel, 0, numSamples, gain);
@@ -1966,6 +2015,7 @@ private:
             setContentOwned (new MainComponent(), true);
             centreWithSize (getWidth(), getHeight());
             setVisible (true);
+            setFullScreen (true);
         }
 
         void closeButtonPressed() override
