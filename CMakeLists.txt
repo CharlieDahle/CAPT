@@ -31,6 +31,7 @@ target_sources(CAPT
         Source/UI/TracksContainer.h
         Source/UI/TracksContainer.cpp
 
+        Source/Tracks/TrackAudioSource.h
         Source/Tracks/TrackBase.h
         Source/Tracks/TrackBase.cpp
         Source/Tracks/MidiTrack.h

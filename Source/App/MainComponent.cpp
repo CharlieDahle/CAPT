@@ -108,7 +108,7 @@ MainComponent::MainComponent()
     addAndMakeVisible (trackInspector);
     trackInspector.setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
 
-    tracksContainer.attachTracks (&engine.getTracks());
+    tracksContainer.attachTracks (&tracks);
     tracksViewport.setViewedComponent (&tracksContainer, false);
     tracksViewport.setScrollBarsShown (true, false);
     addAndMakeVisible (tracksViewport);
@@ -122,7 +122,8 @@ MainComponent::MainComponent()
         track->onExpandToggleRequested = [this, i] { toggleExpand (i); };
         track->setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
         track->setTempoProvider ([this] { return engine.getTempo(); });
-        engine.addTrack (std::move (track));
+        engine.addTrack (track.get());
+        tracks.push_back (std::move (track));
     }
 
     selectTrack (0);
@@ -206,7 +207,7 @@ void MainComponent::timerCallback()
     auto elapsedSeconds = engine.getElapsedSamples() / engine.getCurrentSampleRate();
 
     double totalSeconds = 0.0;
-    for (auto& track : engine.getTracks())
+    for (auto& track : tracks)
         totalSeconds = juce::jmax (totalSeconds, track->getLastEventTimeSamples() / engine.getCurrentSampleRate());
 
     timeLabel.setText (formatTime (elapsedSeconds) + " / " + formatTime (totalSeconds),
@@ -283,7 +284,7 @@ void MainComponent::saveButtonClicked()
         if (file == juce::File())
             return;
 
-        ProjectFile::save (file, engine.getTracks());
+        ProjectFile::save (file, tracks);
     });
 }
 
@@ -299,7 +300,7 @@ void MainComponent::loadButtonClicked()
         if (file == juce::File())
             return;
 
-        ProjectFile::load (file, engine.getTracks(),
+        ProjectFile::load (file, tracks,
                             [this] (int index, TrackType desiredType) { replaceTrack (index, desiredType); });
     });
 }
@@ -314,8 +315,14 @@ void MainComponent::replaceTrack (int index, TrackType newType)
     newTrack->setTempoProvider ([this] { return engine.getTempo(); });
     newTrack->setExpanded (index == expandedTrackIndex);
     tracksContainer.addAndMakeVisible (*newTrack);
+    newTrack->prepareToPlay (engine.getCurrentSampleRate());
 
-    auto oldTrack = engine.replaceTrack (index, std::move (newTrack));
+    // Point the engine at the new track before the old one can be freed, so
+    // the audio thread never dereferences a dangling pointer.
+    engine.replaceTrackAt (index, newTrack.get());
+
+    auto oldTrack = std::move (tracks[(size_t) index]);
+    tracks[(size_t) index] = std::move (newTrack);
 
     tracksContainer.removeChildComponent (oldTrack.get());
 
@@ -336,7 +343,7 @@ void MainComponent::replaceTrack (int index, TrackType newType)
 
 void MainComponent::toggleTrackType (int index)
 {
-    auto newType = engine.getTracks()[(size_t) index]->getType() == TrackType::Midi ? TrackType::Audio : TrackType::Midi;
+    auto newType = tracks[(size_t) index]->getType() == TrackType::Midi ? TrackType::Audio : TrackType::Midi;
     replaceTrack (index, newType);
 }
 
@@ -344,7 +351,6 @@ void MainComponent::selectTrack (int index)
 {
     selectedTrackIndex = index;
 
-    auto& tracks = engine.getTracks();
     for (size_t i = 0; i < tracks.size(); ++i)
         tracks[i]->setSelected ((int) i == index);
 
@@ -355,7 +361,6 @@ void MainComponent::toggleExpand (int index)
 {
     expandedTrackIndex = (expandedTrackIndex == index) ? -1 : index;
 
-    auto& tracks = engine.getTracks();
     for (size_t i = 0; i < tracks.size(); ++i)
         tracks[i]->setExpanded ((int) i == expandedTrackIndex);
 
@@ -367,12 +372,12 @@ void MainComponent::simulateButtonClicked()
 {
     std::vector<TrackBase*> targets;
 
-    for (auto& track : engine.getTracks())
+    for (auto& track : tracks)
         if (track->isArmed())
             targets.push_back (track.get());
 
     if (targets.empty())
-        for (auto& track : engine.getTracks())
+        for (auto& track : tracks)
             targets.push_back (track.get());
 
     melodyInjector.start (targets);

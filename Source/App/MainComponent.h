@@ -55,6 +55,17 @@ private:
     MelodyInjector melodyInjector;
     juce::AudioFormatManager audioFormatManager;
 
+    // Owned here (tracks are juce::Components, so they belong in the
+    // component tree's owner), not by AudioEngine - AudioEngine only holds
+    // non-owning pointers to them, registered via addTrack/replaceTrackAt.
+    //
+    // Declaration order matters: members are destroyed in *reverse* of
+    // declaration order, and AudioEngine's destructor blocks until the audio
+    // thread will never call into it again. Declaring tracks before engine
+    // means engine is destroyed first (guaranteeing the audio thread has
+    // stopped touching whatever it was pointing at) and tracks - the actual
+    // objects - are only freed after that, never before.
+    std::vector<std::unique_ptr<TrackBase>> tracks;
     AudioEngine engine;
 
     juce::TextButton metronomeButton;

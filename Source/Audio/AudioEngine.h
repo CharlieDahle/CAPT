@@ -3,15 +3,17 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Core/Types.h"
 #include "../Core/Tempo.h"
-#include "../Tracks/TrackBase.h"
+#include "../Tracks/TrackAudioSource.h"
 #include "../Dev/AudioInputSimulator.h"
 #include "Metronome.h"
 #include <chrono>
 
-// Owns the audio device, the track list, and the global transport - the
-// real-time side of the app, with no UI dependencies. Tracks are still
-// juce::Components (they're added to the component tree elsewhere), but
-// AudioEngine only ever touches them through the TrackBase audio interface.
+// Owns the audio device and the global transport - the real-time side of
+// the app, with no UI dependencies. Tracks are owned by whoever creates them
+// (MainComponent, since they're also juce::Components needing a place in the
+// component tree) - AudioEngine only holds non-owning TrackAudioSource
+// pointers, so it has zero dependency on the GUI toolkit despite the
+// concrete tracks being Components too.
 //
 // Usage: addTrack() for each starting track, then start() once they're all
 // added - audioDeviceAboutToStart() prepares whatever tracks exist at that
@@ -23,16 +25,14 @@ public:
     AudioEngine();
     ~AudioEngine() override;
 
-    void addTrack (std::unique_ptr<TrackBase> track);
+    void addTrack (TrackAudioSource* track);
     void start();
 
-    std::vector<std::unique_ptr<TrackBase>>& getTracks() { return tracks; }
-
-    // Swaps tracks[index] for newTrack under the tracks lock (so the audio
-    // thread's mix loop never sees a half-replaced vector) and prepares the
-    // new track first. Returns the replaced track so the caller can remove
-    // it from the component tree - that part stays the UI's job.
-    std::unique_ptr<TrackBase> replaceTrack (int index, std::unique_ptr<TrackBase> newTrack);
+    // Swaps tracks[index] for newTrack under the tracks lock, so the audio
+    // thread's mix loop never sees a half-replaced vector. The caller owns
+    // both tracks and is responsible for calling prepareToPlay on newTrack
+    // first and for not destroying the old one until after this returns.
+    void replaceTrackAt (int index, TrackAudioSource* newTrack);
 
     void requestState (TransportState newState) { requestedState.store (newState); }
     TransportState getRequestedState() const { return requestedState.load(); }
@@ -58,13 +58,13 @@ private:
 
     void timerCallback() override;
 
-    void mixTrackIntoOutput (TrackBase& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
+    void mixTrackIntoOutput (TrackAudioSource& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
                               TransportState globalState, double transportElapsedSamples, double bpm,
                               const juce::AudioBuffer<const float>* inputBuffer, bool anySoloed);
 
     juce::AudioDeviceManager deviceManager;
 
-    std::vector<std::unique_ptr<TrackBase>> tracks;
+    std::vector<TrackAudioSource*> tracks;
     juce::CriticalSection tracksLock;
 
     AudioInputSimulator audioInputSimulator;

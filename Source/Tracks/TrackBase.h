@@ -4,23 +4,13 @@
 #include "../Core/Types.h"
 #include "../Core/Tempo.h"
 #include "../UI/IconToggleButton.h"
+#include "TrackAudioSource.h"
 
-class TrackBase : public juce::Component
+class TrackBase : public juce::Component, public TrackAudioSource
 {
 public:
     TrackBase (const juce::String& trackName, TrackType type);
     ~TrackBase() override = default;
-
-    virtual void prepareToPlay (double sampleRate) = 0;
-
-    // inputBuffer is this block's raw mic input, nullptr if unavailable;
-    // only AudioTrack uses it. bpm is the current tempo, read fresh every
-    // block - only MidiTrack uses it (to convert between real time and beat
-    // positions); AudioTrack ignores it since recorded audio isn't
-    // tempo-relative.
-    virtual void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
-                                   TransportState globalState, double elapsedSamples, double bpm,
-                                   const juce::AudioBuffer<const float>* inputBuffer) = 0;
 
     virtual double getLastEventTimeSamples() const = 0;
 
@@ -35,12 +25,12 @@ public:
     virtual void setTempoProvider (std::function<Tempo()> /*provider*/) {}
     virtual void quantize (int /*stepsPerBeat*/) {}
 
-    float getVolume() const { return volume.load(); }
+    float getVolume() const override { return volume.load(); }
     void setVolume (float newVolume) { volume.store (newVolume); }
-    bool isArmed() const { return armed.load(); }
+    bool isArmed() const override { return armed.load(); }
     void setArmed (bool newArmed) { armed.store (newArmed); }
-    bool isMuted() const { return muted.load(); }
-    bool isSoloed() const { return soloed.load(); }
+    bool isMuted() const override { return muted.load(); }
+    bool isSoloed() const override { return soloed.load(); }
     TrackType getType() const { return trackType; }
     juce::String getTrackName() const { return nameLabel.getText(); }
 

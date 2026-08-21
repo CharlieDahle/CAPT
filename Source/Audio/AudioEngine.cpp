@@ -11,9 +11,9 @@ AudioEngine::~AudioEngine()
     deviceManager.closeAudioDevice();
 }
 
-void AudioEngine::addTrack (std::unique_ptr<TrackBase> track)
+void AudioEngine::addTrack (TrackAudioSource* track)
 {
-    tracks.push_back (std::move (track));
+    tracks.push_back (track);
 }
 
 void AudioEngine::start()
@@ -54,21 +54,17 @@ Tempo AudioEngine::getTempo() const
     return tempo;
 }
 
-std::unique_ptr<TrackBase> AudioEngine::replaceTrack (int index, std::unique_ptr<TrackBase> newTrack)
+void AudioEngine::replaceTrackAt (int index, TrackAudioSource* newTrack)
 {
-    newTrack->prepareToPlay (currentSampleRate);
-
     const juce::ScopedLock lock (tracksLock);
-    auto oldTrack = std::move (tracks[(size_t) index]);
-    tracks[(size_t) index] = std::move (newTrack);
-    return oldTrack;
+    tracks[(size_t) index] = newTrack;
 }
 
 void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 {
     currentSampleRate = device->getCurrentSampleRate();
 
-    for (auto& track : tracks)
+    for (auto* track : tracks)
         track->prepareToPlay (currentSampleRate);
 
     scratchBuffer.setSize (2, device->getCurrentBufferSizeSamples());
@@ -134,11 +130,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         const juce::ScopedLock lock (tracksLock);
 
         bool anySoloed = false;
-        for (auto& track : tracks)
+        for (auto* track : tracks)
             if (track->isSoloed())
                 anySoloed = true;
 
-        for (auto& track : tracks)
+        for (auto* track : tracks)
             mixTrackIntoOutput (*track, outputBuffer, numSamples, currentState, elapsedNow, bpm, &inputBuffer, anySoloed);
     }
 
@@ -156,7 +152,7 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         maxCallbackDurationMs.store (durationMs, std::memory_order_relaxed);
 }
 
-void AudioEngine::mixTrackIntoOutput (TrackBase& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
+void AudioEngine::mixTrackIntoOutput (TrackAudioSource& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
                                        TransportState globalState, double transportElapsedSamples, double bpm,
                                        const juce::AudioBuffer<const float>* inputBuffer, bool anySoloed)
 {
