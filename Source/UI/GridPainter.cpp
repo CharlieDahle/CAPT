@@ -16,8 +16,15 @@ namespace GridPainter
             auto x = xOrigin + (float) (step * (double) i * kPixelsPerBeat);
             auto isBarLine = stepsPerBar > 0.0 && std::fmod ((double) i, stepsPerBar) < 0.5;
 
+            // Beat (quarter-note) lines get the bar-line thickness even
+            // though they keep the subdivision colour - a bar line is just
+            // the beat line that also happens to start a bar. Anything
+            // finer than a beat (e.g. the eighth-note line in between at
+            // 1/8 grid density) stays thin.
+            auto isBeatLine = grid.stepsPerBeat > 0 && (i % grid.stepsPerBeat) == 0;
+
             g.setColour (isBarLine ? barColour : subdivisionColour);
-            g.drawVerticalLine ((int) x, area.getY(), area.getBottom());
+            g.drawLine (x, area.getY(), x, area.getBottom(), (isBarLine || isBeatLine) ? 2.0f : 1.0f);
         }
     }
 }

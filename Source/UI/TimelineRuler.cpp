@@ -26,3 +26,13 @@ void TimelineRuler::paint (juce::Graphics& g)
         g.drawText (juce::String (bar + 1), (int) x + 2, 0, 60, getHeight(), juce::Justification::centredLeft);
     }
 }
+
+void TimelineRuler::seekToX (float x)
+{
+    if (onSeekRequested == nullptr)
+        return;
+
+    auto rawBeats = juce::jmax (0.0, (double) (x - kKeyboardStripWidth) / kPixelsPerBeat);
+    auto stepsPerBeat = gridSettingsProvider != nullptr ? gridSettingsProvider().stepsPerBeat : 1;
+    onSeekRequested (nearestGridBeats (rawBeats, stepsPerBeat));
+}

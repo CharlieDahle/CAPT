@@ -38,6 +38,11 @@ TrackInspector::TrackInspector()
         if (currentTrack != nullptr)
             currentTrack->setWaveform (newWaveform);
     };
+    synthPanel.onEnvelopeChanged = [this] (EnvelopeParams newParams)
+    {
+        if (currentTrack != nullptr)
+            currentTrack->setEnvelope (newParams);
+    };
     addAndMakeVisible (synthPanel);
 
     volumeLabel.setText ("Volume", juce::dontSendNotification);
@@ -52,12 +57,6 @@ TrackInspector::TrackInspector()
             currentTrack->setVolume ((float) volumeSlider.getValue());
     };
     addAndMakeVisible (volumeSlider);
-
-    busLabel.setText ("Bus: (not yet implemented)", juce::dontSendNotification);
-    addAndMakeVisible (busLabel);
-
-    effectsLabel.setText ("Effects: (not yet implemented)", juce::dontSendNotification);
-    addAndMakeVisible (effectsLabel);
 
     addAndMakeVisible (waveformDisplay);
 
@@ -87,6 +86,7 @@ void TrackInspector::showTrack (TrackBase* track)
     typeButton.setButtonText (track->getType() == TrackType::Midi ? "MIDI" : "Audio");
     volumeSlider.setValue (track->getVolume(), juce::dontSendNotification);
     synthPanel.setWaveform (track->getWaveform());
+    synthPanel.setEnvelope (track->getEnvelope());
 }
 
 void TrackInspector::resized()
@@ -111,15 +111,6 @@ void TrackInspector::resized()
     volumeRow.items.add (juce::FlexItem (volumeLabel).withWidth (55).withMargin (4));
     volumeRow.items.add (juce::FlexItem (volumeSlider).withWidth (160).withMargin (4));
     volumeRow.performLayout (volumeArea);
-
-    area.removeFromTop (4);
-
-    auto placeholderArea = area.removeFromTop (18);
-    juce::FlexBox placeholderRow;
-    placeholderRow.flexDirection = juce::FlexBox::Direction::row;
-    placeholderRow.items.add (juce::FlexItem (busLabel).withFlex (1));
-    placeholderRow.items.add (juce::FlexItem (effectsLabel).withFlex (1));
-    placeholderRow.performLayout (placeholderArea);
 
     area.removeFromTop (4);
 

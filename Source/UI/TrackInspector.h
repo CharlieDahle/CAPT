@@ -33,8 +33,6 @@ private:
     juce::TextButton quantizeButton;
     juce::Label volumeLabel;
     juce::Slider volumeSlider;
-    juce::Label busLabel;
-    juce::Label effectsLabel;
     WaveformDisplay waveformDisplay;
     SynthControlsPanel synthPanel;
 

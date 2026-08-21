@@ -87,7 +87,7 @@ MainComponent::MainComponent()
     gridResolutionBox.addItem ("1/8", 2);
     gridResolutionBox.addItem ("1/16", 3);
     gridResolutionBox.addItem ("1/32", 4);
-    gridResolutionBox.setSelectedId (3, juce::dontSendNotification);
+    gridResolutionBox.setSelectedId (2, juce::dontSendNotification);
     gridResolutionBox.onChange = [this]
     {
         static const int options[] = { 1, 2, 4, 8 };
@@ -109,6 +109,14 @@ MainComponent::MainComponent()
 
     addAndMakeVisible (timelineRuler);
     timelineRuler.setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
+    timelineRuler.onSeekRequested = [this] (double beats)
+    {
+        auto samples = beatsToSeconds (beats, engine.getTempo()) * engine.getCurrentSampleRate();
+        engine.seekTo (samples);
+
+        // Immediate feedback rather than waiting up to one 30Hz timer tick.
+        repaintPlayhead (samples / engine.getCurrentSampleRate());
+    };
 
     addAndMakeVisible (trackInspector);
     trackInspector.setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
@@ -127,13 +135,14 @@ MainComponent::MainComponent()
         track->onExpandToggleRequested = [this, i] { toggleExpand (i); };
         track->setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
         track->setTempoProvider ([this] { return engine.getTempo(); });
+        track->setPlayheadBeatsProvider ([this] { return secondsToBeats (engine.getElapsedSamples() / engine.getCurrentSampleRate(), engine.getTempo()); });
         engine.addTrack (track.get());
         tracks.push_back (std::move (track));
     }
 
     selectTrack (0);
 
-    setSize (1000, 730);
+    setSize (1000, 780);
 
     engine.start();
 
@@ -207,7 +216,10 @@ void MainComponent::resized()
 
     // Wide and short otherwise (nearly full window width, cramped height),
     // which flattens the waveform display into stretched-looking cycles.
-    auto inspectorHeight = juce::jmin (300, area.getHeight() * 2 / 5);
+    // Half (not 2/5) of what's left, and a taller cap than before, so the
+    // Synth panel has enough room for the ADSR knobs plus the envelope
+    // shape preview beneath them, not just the waveform scope.
+    auto inspectorHeight = juce::jmin (380, area.getHeight() / 2);
     trackInspector.setBounds (area.removeFromBottom (inspectorHeight));
 
     timelineRuler.setBounds (area.removeFromTop (24));
@@ -328,6 +340,7 @@ void MainComponent::replaceTrack (int index, TrackType newType)
     newTrack->onExpandToggleRequested = [this, index] { toggleExpand (index); };
     newTrack->setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
     newTrack->setTempoProvider ([this] { return engine.getTempo(); });
+    newTrack->setPlayheadBeatsProvider ([this] { return secondsToBeats (engine.getElapsedSamples() / engine.getCurrentSampleRate(), engine.getTempo()); });
     newTrack->setExpanded (index == expandedTrackIndex);
     tracksContainer.addAndMakeVisible (*newTrack);
     newTrack->prepareToPlay (engine.getCurrentSampleRate());

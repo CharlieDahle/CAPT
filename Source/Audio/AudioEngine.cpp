@@ -118,7 +118,20 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 
     if (transitioned)
     {
-        elapsedNow = 0.0;
+        // Starting Play/Record picks up wherever the playhead was last
+        // dragged to (seekTo(), message-thread only, idle-gated - see its
+        // comment); stopping always resets back to the top, same as before
+        // this feature existed.
+        if (desiredState == TransportState::Idle)
+        {
+            elapsedNow = 0.0;
+            scrubPositionSamples.store (0.0, std::memory_order_relaxed);
+        }
+        else
+        {
+            elapsedNow = scrubPositionSamples.load (std::memory_order_relaxed);
+        }
+
         currentState = desiredState;
     }
 

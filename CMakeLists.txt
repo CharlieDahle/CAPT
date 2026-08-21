@@ -34,6 +34,8 @@ target_sources(CAPT
         Source/UI/TrackInspector.cpp
         Source/UI/SynthControlsPanel.h
         Source/UI/SynthControlsPanel.cpp
+        Source/UI/EnvelopeVisualizer.h
+        Source/UI/EnvelopeVisualizer.cpp
         Source/UI/TracksContainer.h
         Source/UI/TracksContainer.cpp
 

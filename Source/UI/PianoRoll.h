@@ -21,6 +21,12 @@ public:
         double startBeats = 0.0;
         double endBeats = 1.0;
         float velocity = 0.8f;
+
+        // Transient UI-only state - never read by MidiTrack::setNotesFromEditor,
+        // so it never round-trips into recorded events or the project file.
+        // Reset to false for free every time `notes` is rebuilt from
+        // notesProvider(), since that always constructs fresh Note values.
+        bool selected = false;
     };
 
     PianoRollCanvas();
@@ -31,6 +37,9 @@ public:
 
     void setLaneClickHandler (std::function<void()> handler) { laneClickHandler = std::move (handler); }
     void setGridSettingsProvider (std::function<GridSettings()> provider) { gridSettingsProvider = std::move (provider); }
+
+    // Where Cmd+V drops pasted notes.
+    void setPlayheadBeatsProvider (std::function<double()> provider) { playheadBeatsProvider = std::move (provider); }
 
     void setSelectedFlag (bool newSelected) { selectedFlag = newSelected; }
 
@@ -51,14 +60,47 @@ public:
     void mouseUp (const juce::MouseEvent&) override;
     void mouseWheelMove (const juce::MouseEvent& e, const juce::MouseWheelDetails& wheel) override;
 
+    // Repaints so the ghost-note placement preview (see paint()) tracks the
+    // cursor. Modifier-key-only changes with a stationary mouse are instead
+    // caught by timerCallback's unconditional repaint.
+    void mouseMove (const juce::MouseEvent&) override { repaint(); }
+
+    // Delete/Backspace, Cmd+C/X/V/A, Escape - all gated on the same
+    // isEditable()/selected/expanded check everything else here uses.
+    // Returns false (unhandled) for anything not listed above, so it bubbles
+    // up to MainComponent - that's what keeps Cmd+K working regardless of
+    // which piano roll currently has keyboard focus.
+    bool keyPressed (const juce::KeyPress& key) override;
+
+    // JUCE calls this whenever it re-checks what the cursor should look
+    // like (mouse movement, or the periodic updateMouseCursor() poll in
+    // timerCallback - modifier-key-only changes don't fire a mouse event on
+    // their own, so this component's timer forces a re-check instead of
+    // waiting for the mouse to move). No position parameter is available,
+    // so this can't tell the keyboard-strip gutter apart from the rest -
+    // acceptable, it's a small area and the cursor's just a hint either way.
+    juce::MouseCursor getMouseCursor() override;
+
 private:
-    enum class DragMode { move, resize };
+    // move/resize now both operate on "whatever is selected", with the
+    // clicked note as the anchor - a single selected note is just a group of
+    // one, so there's no separate single-note code path any more.
+    enum class DragMode { none, move, resize, marquee };
+
+    void clearSelection();
+    void deleteSelectedNotes();
 
     bool isEditable() const { return editableProvider != nullptr && editableProvider(); }
 
     juce::Rectangle<float> noteBounds (const Note& note) const;
     bool isNearRightEdge (juce::Point<float> position, const Note& note) const;
     int findNoteAt (juce::Point<float> position) const;
+
+    // What a Command-click at `position` would create - grid-snapped start,
+    // default 1-beat length. Shared by the actual placement in mouseDown
+    // and the ghost-note preview in paint(), so the preview is always
+    // exactly what you'd get, never just an approximation of it.
+    Note placementNoteAt (juce::Point<float> position) const;
 
     // Collapsed: pitch range squeezed to fit whatever height this has.
     // Expanded: fixed bigger row height, tall enough to need scrolling.
@@ -82,15 +124,30 @@ private:
     std::function<bool()> editableProvider;
     std::function<void()> laneClickHandler;
     std::function<GridSettings()> gridSettingsProvider;
+    std::function<double()> playheadBeatsProvider;
     bool selectedFlag = false;
     bool expandedFlag = false;
     bool wasIdleLastTick = false;
 
     std::vector<Note> notes;
-    int draggingIndex = -1;
-    DragMode dragMode = DragMode::move;
-    Note dragStartNote;
+
+    // Snapshot of `notes` taken at mouse-down, giving every dragged note a
+    // stable "original position" to compute this gesture's delta from on
+    // each mouseDrag call - same principle as the old single-note
+    // dragStartNote, just applied per-index across however many are selected.
+    std::vector<Note> dragSnapshot;
+    int anchorIndex = -1;
+    DragMode dragMode = DragMode::none;
     juce::Point<float> dragStartPos;
+
+    bool marqueeAdditive = false;
+    juce::Rectangle<float> marqueeRect;
+
+    // Process-wide, message-thread-only (mouse/keyboard driven, never
+    // touched by the audio thread) - a plain static needs no
+    // synchronization, same reasoning as `notes` itself not being atomic.
+    // This is what makes copy on one track + paste on a different track work.
+    static std::vector<Note> sharedClipboard;
 
     static constexpr int lowestNote = 36;
     static constexpr int highestNote = 96;
@@ -114,6 +171,7 @@ public:
     void setEditableProvider (std::function<bool()> provider) { canvas.setEditableProvider (std::move (provider)); }
     void setLaneClickHandler (std::function<void()> handler) { canvas.setLaneClickHandler (std::move (handler)); }
     void setGridSettingsProvider (std::function<GridSettings()> provider) { canvas.setGridSettingsProvider (std::move (provider)); }
+    void setPlayheadBeatsProvider (std::function<double()> provider) { canvas.setPlayheadBeatsProvider (std::move (provider)); }
     void setSelected (bool newSelected) { canvas.setSelectedFlag (newSelected); }
 
     void setExpanded (bool newExpanded);

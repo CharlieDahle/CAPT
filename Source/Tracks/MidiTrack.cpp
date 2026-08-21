@@ -10,7 +10,7 @@ MidiTrack::MidiTrack (const juce::String& trackName)
     addAndMakeVisible (pianoRollView);
 
     for (int i = 0; i < 8; ++i)
-        synth.addVoice (new SynthVoice (waveform));
+        synth.addVoice (new SynthVoice (waveform, envelopeState));
     synth.addSound (new SynthSound());
 
     // Reserved so the push_back in renderNextBlock (audio thread, while
@@ -174,6 +174,20 @@ void MidiTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSamp
     synth.renderNextBlock (buffer, midiForSynth, startSample, numSamples);
 }
 
+void MidiTrack::setEnvelope (EnvelopeParams newParams)
+{
+    envelopeState.attackSeconds.store (newParams.attackSeconds);
+    envelopeState.decaySeconds.store (newParams.decaySeconds);
+    envelopeState.sustainLevel.store (newParams.sustainLevel);
+    envelopeState.releaseSeconds.store (newParams.releaseSeconds);
+}
+
+EnvelopeParams MidiTrack::getEnvelope() const
+{
+    return { envelopeState.attackSeconds.load(), envelopeState.decaySeconds.load(),
+             envelopeState.sustainLevel.load(), envelopeState.releaseSeconds.load() };
+}
+
 void MidiTrack::quantize (int stepsPerBeat)
 {
     auto notes = getRecordedNotesSnapshot();
@@ -212,6 +226,10 @@ std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
     auto trackXml = std::make_unique<juce::XmlElement> ("MIDI_TRACK");
     writeVolumeAttribute (*trackXml);
     trackXml->setAttribute ("waveform", (int) waveform.load());
+    trackXml->setAttribute ("attack", (double) envelopeState.attackSeconds.load());
+    trackXml->setAttribute ("decay", (double) envelopeState.decaySeconds.load());
+    trackXml->setAttribute ("sustain", (double) envelopeState.sustainLevel.load());
+    trackXml->setAttribute ("release", (double) envelopeState.releaseSeconds.load());
 
     auto count = numRecordedEvents.load();
 
@@ -232,6 +250,10 @@ void MidiTrack::fromXml (const juce::XmlElement& trackXml, const juce::File&)
 {
     setVolumeFromXml (trackXml.getDoubleAttribute ("volume", 0.8));
     waveform.store ((OscillatorWaveform) trackXml.getIntAttribute ("waveform", (int) OscillatorWaveform::Sine));
+    envelopeState.attackSeconds.store ((float) trackXml.getDoubleAttribute ("attack", 0.01));
+    envelopeState.decaySeconds.store ((float) trackXml.getDoubleAttribute ("decay", 0.1));
+    envelopeState.sustainLevel.store ((float) trackXml.getDoubleAttribute ("sustain", 0.8));
+    envelopeState.releaseSeconds.store ((float) trackXml.getDoubleAttribute ("release", 0.2));
 
     int count = 0;
 

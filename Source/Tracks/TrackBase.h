@@ -25,10 +25,20 @@ public:
     virtual void setTempoProvider (std::function<Tempo()> /*provider*/) {}
     virtual void quantize (int /*stepsPerBeat*/) {}
 
+    // No-op for tracks with no paste destination (AudioTrack) - only
+    // MidiTrack overrides this, forwarding to its PianoRollView so Cmd+V
+    // knows where "now" is.
+    virtual void setPlayheadBeatsProvider (std::function<double()> /*provider*/) {}
+
     // No-op for tracks with no oscillator (AudioTrack) - only MidiTrack
     // overrides these.
     virtual void setWaveform (OscillatorWaveform /*newWaveform*/) {}
     virtual OscillatorWaveform getWaveform() const { return OscillatorWaveform::Sine; }
+
+    // No-op for tracks with no envelope (AudioTrack) - only MidiTrack
+    // overrides these.
+    virtual void setEnvelope (EnvelopeParams /*newParams*/) {}
+    virtual EnvelopeParams getEnvelope() const { return {}; }
 
     float getVolume() const override { return volume.load(); }
     void setVolume (float newVolume) { volume.store (newVolume); }

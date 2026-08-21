@@ -41,6 +41,24 @@ public:
     double getElapsedSamples() const { return elapsedSamples.load(); }
     double getCurrentSampleRate() const { return currentSampleRate; }
 
+    // Drag-the-playhead support. Only meaningful while idle - the audio
+    // thread owns elapsedSamples' progression the instant Play/Record is
+    // running, and racing a message-thread store against its own
+    // read-increment-store each callback would just make a drag get
+    // silently overwritten a moment later, not actually corrupt anything.
+    // Updates elapsedSamples immediately too (not just the scrub target)
+    // so the UI reflects the new position without waiting on the audio
+    // thread, which isn't even running any state-changing work while idle.
+    void seekTo (double newElapsedSamples)
+    {
+        if (requestedState.load() != TransportState::Idle)
+            return;
+
+        auto clamped = juce::jmax (0.0, newElapsedSamples);
+        scrubPositionSamples.store (clamped);
+        elapsedSamples.store (clamped);
+    }
+
     void startSimulatingAudioInput (std::vector<float> samples) { audioInputSimulator.start (std::move (samples)); }
 
     void setTempo (Tempo tempo);
@@ -94,6 +112,7 @@ private:
     std::atomic<TransportState> requestedState { TransportState::Idle };
     TransportState currentState = TransportState::Idle;
     std::atomic<double> elapsedSamples { 0.0 };
+    std::atomic<double> scrubPositionSamples { 0.0 };
     double currentSampleRate = 44100.0;
 
     // Audio-callback timing diagnostics, printed once a second by this

@@ -22,6 +22,20 @@ constexpr float kKeyboardStripWidth = 30.0f;
 // below this.
 constexpr float kTrackHeaderHeight = 20.0f;
 
+// Amplitude envelope shape applied to every note: Attack/Decay/Release are
+// times in seconds (how long each stage takes to complete), Sustain is a
+// level (0-1, not a time) - the value the envelope holds at while the key
+// stays down. Plain value type crossing the UI/track boundary, same role as
+// RecordedNoteEvent below - the atomics that make it real-time-safe live in
+// MidiTrack's EnvelopeState, not here.
+struct EnvelopeParams
+{
+    float attackSeconds = 0.01f;
+    float decaySeconds = 0.1f;
+    float sustainLevel = 0.8f;
+    float releaseSeconds = 0.2f;
+};
+
 struct RecordedNoteEvent
 {
     double beatPosition = 0.0;

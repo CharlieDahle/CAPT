@@ -102,7 +102,7 @@ private:
     juce::ComboBox gridResolutionBox;
     juce::Slider metronomeVolumeSlider;
     TimelineRuler timelineRuler;
-    int gridStepsPerBeat = 4;
+    int gridStepsPerBeat = 2;
 
     juce::Rectangle<int> tracksArea;
     int previousPlayheadX = -1;

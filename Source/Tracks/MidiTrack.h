@@ -11,6 +11,18 @@ struct SynthSound : public juce::SynthesiserSound
     bool appliesToChannel (int) override       { return true; }
 };
 
+// Live-tweakable ADSR parameters shared by every voice in the synth - same
+// pattern as `waveform` below: held here (not per-voice) so a slider change
+// is picked up by whichever voice reads it next, with each SynthVoice
+// keeping only a const reference to it rather than its own copy.
+struct EnvelopeState
+{
+    std::atomic<float> attackSeconds { 0.01f };
+    std::atomic<float> decaySeconds { 0.1f };
+    std::atomic<float> sustainLevel { 0.8f };
+    std::atomic<float> releaseSeconds { 0.2f };
+};
+
 // Naive (non-band-limited) oscillator, on purpose - aliasing on saw/square/
 // triangle at high notes is a real thing you'd fix with band-limiting, but
 // this is meant to be a legible starting point for learning synthesis, not
@@ -27,13 +39,17 @@ inline float generateOscillatorSample (OscillatorWaveform waveform, double phase
     }
 }
 
+enum class EnvelopeStage { Attack, Decay, Sustain, Release, Idle };
+
 struct SynthVoice : public juce::SynthesiserVoice
 {
-    // waveformToUse is owned by the MidiTrack that creates this voice (and
-    // outlives it) - read fresh every sample rather than captured once, so
-    // switching waveforms takes effect immediately, even mid-note.
-    explicit SynthVoice (const std::atomic<OscillatorWaveform>& waveformToUse)
-        : waveform (waveformToUse)
+    // waveformToUse/envelopeToUse are owned by the MidiTrack that creates
+    // this voice (and outlive it) - read fresh at note-start/note-stop
+    // (waveform: every sample) rather than captured once at construction,
+    // so tweaking a slider takes effect on the next note without having to
+    // rebuild the voice.
+    SynthVoice (const std::atomic<OscillatorWaveform>& waveformToUse, const EnvelopeState& envelopeToUse)
+        : waveform (waveformToUse), envelopeParams (envelopeToUse)
     {
     }
 
@@ -49,21 +65,36 @@ struct SynthVoice : public juce::SynthesiserVoice
         auto frequency = juce::MidiMessage::getMidiNoteInHertz (midiNoteNumber);
         phaseDelta = frequency / getSampleRate();
         level = velocity * 0.2f;
-        envelope = 0.0f;
-        releasing = false;
-        // 5ms fade - without it, note-on/off is a hard jump in the middle of
-        // the waveform (not a zero crossing), heard as a click; rapid
-        // retriggering turns that into audible crackle.
-        envelopeStep = 1.0f / (float) juce::jmax (1.0, 0.005 * getSampleRate());
-        active = true;
+
+        // Captured once per note-on (like frequency/level above), not read
+        // fresh every sample - a mid-note slider tweak takes effect on the
+        // *next* note struck, keeping the per-sample loop below simple.
+        auto attackSeconds = envelopeParams.attackSeconds.load();
+        auto decaySeconds = envelopeParams.decaySeconds.load();
+        noteSustainLevel = envelopeParams.sustainLevel.load();
+
+        envelopeLevel = 0.0f;
+        stage = EnvelopeStage::Attack;
+        // Step size that reaches the stage's target in exactly attack/decay
+        // seconds; jmax guards a 0-second stage (an instant jump) from
+        // dividing by zero.
+        attackStep = 1.0f / juce::jmax (1.0f, attackSeconds * (float) getSampleRate());
+        decayStep = (1.0f - noteSustainLevel) / juce::jmax (1.0f, decaySeconds * (float) getSampleRate());
     }
 
     void stopNote (float /*velocity*/, bool /*allowTailOff*/) override
     {
-        // Always fade out, even on a forced stop (voice stealing / allNotesOff)
-        // - clearCurrentNote() is deferred to renderNextBlock once the fade
-        // finishes, so the voice still reports itself busy for its tail.
-        releasing = true;
+        // Always release, even on a forced stop (voice stealing / allNotesOff)
+        // - clearCurrentNote() is deferred to renderNextBlock until the
+        // release stage reaches 0, so the voice still reports itself busy
+        // for its tail.
+        auto releaseSeconds = envelopeParams.releaseSeconds.load();
+        // Scaled by the level being released *from*, not a fixed assumption
+        // that it's at sustain - a note let go mid-attack/decay still takes
+        // the full release time to reach silence, just starting from
+        // wherever the envelope currently is.
+        releaseStep = envelopeLevel / juce::jmax (1.0f, releaseSeconds * (float) getSampleRate());
+        stage = EnvelopeStage::Release;
     }
 
     void pitchWheelMoved (int) override {}
@@ -72,17 +103,34 @@ struct SynthVoice : public juce::SynthesiserVoice
     void renderNextBlock (juce::AudioBuffer<float>& outputBuffer,
                            int startSample, int numSamples) override
     {
-        if (! active)
+        if (stage == EnvelopeStage::Idle)
             return;
 
         auto currentWaveform = waveform.load();
 
         for (int i = 0; i < numSamples; ++i)
         {
-            envelope = releasing ? juce::jmax (0.0f, envelope - envelopeStep)
-                                  : juce::jmin (1.0f, envelope + envelopeStep);
+            switch (stage)
+            {
+                case EnvelopeStage::Attack:
+                    envelopeLevel += attackStep;
+                    if (envelopeLevel >= 1.0f) { envelopeLevel = 1.0f; stage = EnvelopeStage::Decay; }
+                    break;
+                case EnvelopeStage::Decay:
+                    envelopeLevel -= decayStep;
+                    if (envelopeLevel <= noteSustainLevel) { envelopeLevel = noteSustainLevel; stage = EnvelopeStage::Sustain; }
+                    break;
+                case EnvelopeStage::Release:
+                    envelopeLevel = juce::jmax (0.0f, envelopeLevel - releaseStep);
+                    if (envelopeLevel <= 0.0f) { envelopeLevel = 0.0f; stage = EnvelopeStage::Idle; }
+                    break;
+                case EnvelopeStage::Sustain:
+                case EnvelopeStage::Idle:
+                default:
+                    break;
+            }
 
-            auto sampleValue = generateOscillatorSample (currentWaveform, phase) * level * envelope;
+            auto sampleValue = generateOscillatorSample (currentWaveform, phase) * level * envelopeLevel;
 
             for (int channel = 0; channel < outputBuffer.getNumChannels(); ++channel)
                 outputBuffer.addSample (channel, startSample + i, sampleValue);
@@ -92,22 +140,23 @@ struct SynthVoice : public juce::SynthesiserVoice
                 phase -= 1.0;
         }
 
-        if (releasing && envelope <= 0.0f)
-        {
-            active = false;
+        if (stage == EnvelopeStage::Idle)
             clearCurrentNote();
-        }
     }
 
 private:
     const std::atomic<OscillatorWaveform>& waveform;
-    bool active = false;
-    bool releasing = false;
+    const EnvelopeState& envelopeParams;
     double phase = 0.0;
     double phaseDelta = 0.0;
     float level = 0.0f;
-    float envelope = 0.0f;
-    float envelopeStep = 1.0f;
+
+    EnvelopeStage stage = EnvelopeStage::Idle;
+    float envelopeLevel = 0.0f;
+    float attackStep = 0.0f;
+    float decayStep = 0.0f;
+    float noteSustainLevel = 0.8f;
+    float releaseStep = 0.0f;
 };
 
 class MidiTrack : public TrackBase
@@ -137,6 +186,11 @@ public:
         pianoRollView.setGridSettingsProvider (std::move (provider));
     }
 
+    void setPlayheadBeatsProvider (std::function<double()> provider) override
+    {
+        pianoRollView.setPlayheadBeatsProvider (std::move (provider));
+    }
+
     // Retained (not just forwarded) - needed on the message thread by
     // getLastEventTimeSamples() to convert the last recorded beat position
     // back to samples using the current tempo.
@@ -146,6 +200,9 @@ public:
 
     void setWaveform (OscillatorWaveform newWaveform) override { waveform.store (newWaveform); }
     OscillatorWaveform getWaveform() const override { return waveform.load(); }
+
+    void setEnvelope (EnvelopeParams newParams) override;
+    EnvelopeParams getEnvelope() const override;
 
     double getLastEventTimeSamples() const override;
 
@@ -165,6 +222,7 @@ private:
     PianoRollView pianoRollView;
     juce::Synthesiser synth;
     std::atomic<OscillatorWaveform> waveform { OscillatorWaveform::Sine };
+    EnvelopeState envelopeState;
     double currentSampleRate = 44100.0;
     std::function<Tempo()> tempoProvider;
     std::atomic<TransportState> lastGlobalState { TransportState::Idle };
