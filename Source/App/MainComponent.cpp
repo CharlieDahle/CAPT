@@ -29,6 +29,11 @@ MainComponent::MainComponent()
     addAndMakeVisible (simulateAudioButton);
     simulateAudioButton.onClick = [this] { simulateAudioButtonClicked(); };
 
+    midiKeyboardButton.setButtonText ("MIDI Keyboard");
+    addAndMakeVisible (midiKeyboardButton);
+    midiKeyboardButton.onClick = [this] { midiKeyboardButtonClicked(); };
+    popupKeyboardState.addListener (this);
+
     metronomeButton.setButtonText ("Metronome");
     metronomeButton.setClickingTogglesState (true);
     metronomeButton.setToggleState (false, juce::dontSendNotification);
@@ -133,11 +138,18 @@ MainComponent::MainComponent()
     engine.start();
 
     startTimerHz (30);
+
+    // Baseline focus so Cmd/Ctrl+K works immediately on launch, before the
+    // user has clicked anything - keyPressed bubbles up from whatever child
+    // has focus, so without this there'd be nothing to bubble from yet.
+    setWantsKeyboardFocus (true);
+    grabKeyboardFocus();
 }
 
 MainComponent::~MainComponent()
 {
     stopTimer();
+    popupKeyboardState.removeListener (this);
 }
 
 void MainComponent::paint (juce::Graphics& g)
@@ -178,6 +190,7 @@ void MainComponent::resized()
     topRow.items.add (juce::FlexItem (loadButton).withWidth (90).withMargin (5));
     topRow.items.add (juce::FlexItem (simulateButton).withWidth (140).withMargin (5));
     topRow.items.add (juce::FlexItem (simulateAudioButton).withWidth (170).withMargin (5));
+    topRow.items.add (juce::FlexItem (midiKeyboardButton).withWidth (120).withMargin (5));
     topRow.items.add (juce::FlexItem (metronomeButton).withWidth (110).withMargin (5));
     topRow.items.add (juce::FlexItem (timeLabel).withWidth (120).withMargin (5));
     topRow.performLayout (topRowArea);
@@ -192,7 +205,9 @@ void MainComponent::resized()
     gridRow.items.add (juce::FlexItem (metronomeVolumeSlider).withWidth (140).withMargin (4));
     gridRow.performLayout (gridRowArea);
 
-    auto inspectorHeight = juce::jmin (280, area.getHeight() / 3);
+    // Wide and short otherwise (nearly full window width, cramped height),
+    // which flattens the waveform display into stretched-looking cycles.
+    auto inspectorHeight = juce::jmin (300, area.getHeight() * 2 / 5);
     trackInspector.setBounds (area.removeFromBottom (inspectorHeight));
 
     timelineRuler.setBounds (area.removeFromTop (24));
@@ -355,6 +370,8 @@ void MainComponent::selectTrack (int index)
         tracks[i]->setSelected ((int) i == index);
 
     trackInspector.showTrack (tracks[(size_t) index].get());
+    trackInspector.clearWaveform();
+    engine.setVisualiserTarget (tracks[(size_t) index].get(), &trackInspector.getWaveformTap());
 }
 
 void MainComponent::toggleExpand (int index)
@@ -368,7 +385,7 @@ void MainComponent::toggleExpand (int index)
     resized();
 }
 
-void MainComponent::simulateButtonClicked()
+std::vector<TrackBase*> MainComponent::armedOrAllTrackTargets()
 {
     std::vector<TrackBase*> targets;
 
@@ -380,7 +397,94 @@ void MainComponent::simulateButtonClicked()
         for (auto& track : tracks)
             targets.push_back (track.get());
 
-    melodyInjector.start (targets);
+    return targets;
+}
+
+void MainComponent::simulateButtonClicked()
+{
+    melodyInjector.start (armedOrAllTrackTargets());
+}
+
+void MainComponent::midiKeyboardButtonClicked()
+{
+    if (midiKeyboardWindow == nullptr)
+    {
+        midiKeyboardWindow = std::make_unique<MidiKeyboardWindow> (popupKeyboardState);
+        midiKeyboardWindow->onCloseRequested = [this] { midiKeyboardButton.setToggleState (false, juce::dontSendNotification); };
+        midiKeyboardButton.setToggleState (true, juce::dontSendNotification);
+        return;
+    }
+
+    auto shouldShow = ! midiKeyboardWindow->isVisible();
+    midiKeyboardWindow->setVisible (shouldShow);
+
+    if (shouldShow)
+        midiKeyboardWindow->toFront (true);
+
+    midiKeyboardButton.setToggleState (shouldShow, juce::dontSendNotification);
+}
+
+bool MainComponent::keyPressed (const juce::KeyPress& key)
+{
+    // Cmd+Shift+F (Ctrl+Shift+F on Windows/Linux, since commandModifier maps
+    // to Ctrl there) toggles fullscreen. Reached via getTopLevelComponent()
+    // since the actual DocumentWindow lives in Main.cpp, not here - this
+    // component is just its content.
+    if (key == juce::KeyPress ('f', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier, 0))
+    {
+        if (auto* window = dynamic_cast<juce::DocumentWindow*> (getTopLevelComponent()))
+            window->setFullScreen (! window->isFullScreen());
+
+        return true;
+    }
+
+    if (key != juce::KeyPress ('k', juce::ModifierKeys::commandModifier, 0))
+        return false;
+
+    // This component's keyPressed only fires while the main window has
+    // focus, so the popup - if open at all - can't also be the focused
+    // window right now. That makes "closed" and "open but unfocused" the
+    // only two cases reachable here; "open and focused" is handled on the
+    // popup's own side instead.
+    if (midiKeyboardWindow == nullptr || ! midiKeyboardWindow->isVisible())
+        midiKeyboardButtonClicked();
+
+    if (midiKeyboardWindow != nullptr)
+        midiKeyboardWindow->focusKeyboard();
+
+    return true;
+}
+
+void MainComponent::handleNoteOn (juce::MidiKeyboardState*, int /*midiChannel*/, int midiNoteNumber, float velocity)
+{
+    for (auto* track : liveKeyboardTargets())
+        track->injectTestNote (midiNoteNumber, velocity, true);
+}
+
+void MainComponent::handleNoteOff (juce::MidiKeyboardState*, int /*midiChannel*/, int midiNoteNumber, float velocity)
+{
+    for (auto* track : liveKeyboardTargets())
+        track->injectTestNote (midiNoteNumber, velocity, false);
+}
+
+std::vector<TrackBase*> MainComponent::liveKeyboardTargets()
+{
+    std::vector<TrackBase*> targets;
+
+    for (auto& track : tracks)
+        if (track->isArmed())
+            targets.push_back (track.get());
+
+    // Unlike armedOrAllTrackTargets() (used by the one-shot melody
+    // simulator), falling back to *every* track here would mean each key
+    // you play fires the same note on every track's synth at once - their
+    // outputs sum, and with all 4 tracks unarmed that's an easy way to clip.
+    // Falling back to just the selected track keeps live playing at a
+    // single voice's volume regardless of arming state.
+    if (targets.empty())
+        targets.push_back (tracks[(size_t) selectedTrackIndex].get());
+
+    return targets;
 }
 
 void MainComponent::simulateAudioButtonClicked()

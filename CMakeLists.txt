@@ -24,10 +24,16 @@ target_sources(CAPT
         Source/UI/GridPainter.cpp
         Source/UI/TimelineRuler.h
         Source/UI/TimelineRuler.cpp
+        Source/UI/MidiKeyboardWindow.h
+        Source/UI/MidiKeyboardWindow.cpp
+        Source/UI/WaveformDisplay.h
+        Source/UI/WaveformDisplay.cpp
         Source/UI/PianoRoll.h
         Source/UI/PianoRoll.cpp
         Source/UI/TrackInspector.h
         Source/UI/TrackInspector.cpp
+        Source/UI/SynthControlsPanel.h
+        Source/UI/SynthControlsPanel.cpp
         Source/UI/TracksContainer.h
         Source/UI/TracksContainer.cpp
 
@@ -43,6 +49,7 @@ target_sources(CAPT
 
         Source/Audio/AudioEngine.h
         Source/Audio/AudioEngine.cpp
+        Source/Audio/AudioTap.h
         Source/Audio/Metronome.h
         Source/Audio/Metronome.cpp
 

@@ -2,6 +2,7 @@
 
 enum class TransportState { Idle, Recording, Playing };
 enum class TrackType { Midi, Audio };
+enum class OscillatorWaveform { Sine, Saw, Square, Triangle };
 
 // Shared by the piano roll, the grid, and the playhead. Fixed regardless of
 // tempo - beats are the canonical musical-time unit, so bar 4 always sits

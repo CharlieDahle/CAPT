@@ -10,8 +10,8 @@ MidiTrack::MidiTrack (const juce::String& trackName)
     addAndMakeVisible (pianoRollView);
 
     for (int i = 0; i < 8; ++i)
-        synth.addVoice (new SineWaveVoice());
-    synth.addSound (new SineWaveSound());
+        synth.addVoice (new SynthVoice (waveform));
+    synth.addSound (new SynthSound());
 
     // Reserved so the push_back in renderNextBlock (audio thread, while
     // recording) never allocates - 128 covers every possible held pitch.
@@ -211,6 +211,7 @@ std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
 {
     auto trackXml = std::make_unique<juce::XmlElement> ("MIDI_TRACK");
     writeVolumeAttribute (*trackXml);
+    trackXml->setAttribute ("waveform", (int) waveform.load());
 
     auto count = numRecordedEvents.load();
 
@@ -230,6 +231,7 @@ std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
 void MidiTrack::fromXml (const juce::XmlElement& trackXml, const juce::File&)
 {
     setVolumeFromXml (trackXml.getDoubleAttribute ("volume", 0.8));
+    waveform.store ((OscillatorWaveform) trackXml.getIntAttribute ("waveform", (int) OscillatorWaveform::Sine));
 
     int count = 0;
 

@@ -33,6 +33,16 @@ TrackInspector::TrackInspector()
     };
     addAndMakeVisible (quantizeButton);
 
+    synthPanel.onWaveformChanged = [this] (OscillatorWaveform newWaveform)
+    {
+        if (currentTrack != nullptr)
+            currentTrack->setWaveform (newWaveform);
+    };
+    addAndMakeVisible (synthPanel);
+
+    volumeLabel.setText ("Volume", juce::dontSendNotification);
+    addAndMakeVisible (volumeLabel);
+
     volumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     volumeSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
     volumeSlider.setRange (0.0, 1.0);
@@ -49,8 +59,7 @@ TrackInspector::TrackInspector()
     effectsLabel.setText ("Effects: (not yet implemented)", juce::dontSendNotification);
     addAndMakeVisible (effectsLabel);
 
-    soundLabel.setText ("Sound: (not yet implemented)", juce::dontSendNotification);
-    addAndMakeVisible (soundLabel);
+    addAndMakeVisible (waveformDisplay);
 
     showTrack (nullptr);
 }
@@ -60,10 +69,12 @@ void TrackInspector::showTrack (TrackBase* track)
     currentTrack = track;
 
     auto hasTrack = (track != nullptr);
+    auto hasSynth = hasTrack && track->getType() == TrackType::Midi;
     armButton.setEnabled (hasTrack);
     typeButton.setEnabled (hasTrack);
     volumeSlider.setEnabled (hasTrack);
-    quantizeButton.setEnabled (hasTrack && track->getType() == TrackType::Midi);
+    quantizeButton.setEnabled (hasSynth);
+    synthPanel.setControlsEnabled (hasSynth);
 
     if (! hasTrack)
     {
@@ -75,6 +86,7 @@ void TrackInspector::showTrack (TrackBase* track)
     armButton.setButtonText (track->isArmed() ? "Armed" : "Arm");
     typeButton.setButtonText (track->getType() == TrackType::Midi ? "MIDI" : "Audio");
     volumeSlider.setValue (track->getVolume(), juce::dontSendNotification);
+    synthPanel.setWaveform (track->getWaveform());
 }
 
 void TrackInspector::resized()
@@ -83,21 +95,37 @@ void TrackInspector::resized()
 
     headerLabel.setBounds (area.removeFromTop (28));
 
-    auto controlsArea = area.removeFromTop (36);
+    auto controlsArea = area.removeFromTop (32);
     juce::FlexBox controlsRow;
     controlsRow.flexDirection = juce::FlexBox::Direction::row;
     controlsRow.items.add (juce::FlexItem (armButton).withWidth (100).withMargin (4));
     controlsRow.items.add (juce::FlexItem (typeButton).withWidth (70).withMargin (4));
     controlsRow.items.add (juce::FlexItem (quantizeButton).withWidth (90).withMargin (4));
-    controlsRow.items.add (juce::FlexItem (volumeSlider).withFlex (1).withMargin (4));
     controlsRow.performLayout (controlsArea);
 
-    area.removeFromTop (12);
+    area.removeFromTop (4);
 
-    juce::FlexBox placeholderColumn;
-    placeholderColumn.flexDirection = juce::FlexBox::Direction::column;
-    placeholderColumn.items.add (juce::FlexItem (busLabel).withHeight (24));
-    placeholderColumn.items.add (juce::FlexItem (effectsLabel).withHeight (24));
-    placeholderColumn.items.add (juce::FlexItem (soundLabel).withHeight (24));
-    placeholderColumn.performLayout (area);
+    auto volumeArea = area.removeFromTop (28);
+    juce::FlexBox volumeRow;
+    volumeRow.flexDirection = juce::FlexBox::Direction::row;
+    volumeRow.items.add (juce::FlexItem (volumeLabel).withWidth (55).withMargin (4));
+    volumeRow.items.add (juce::FlexItem (volumeSlider).withWidth (160).withMargin (4));
+    volumeRow.performLayout (volumeArea);
+
+    area.removeFromTop (4);
+
+    auto placeholderArea = area.removeFromTop (18);
+    juce::FlexBox placeholderRow;
+    placeholderRow.flexDirection = juce::FlexBox::Direction::row;
+    placeholderRow.items.add (juce::FlexItem (busLabel).withFlex (1));
+    placeholderRow.items.add (juce::FlexItem (effectsLabel).withFlex (1));
+    placeholderRow.performLayout (placeholderArea);
+
+    area.removeFromTop (4);
+
+    // Scope on the left; the freed space to its right is the titled Synth
+    // panel, so it reads as a defined section rather than blank canvas.
+    waveformDisplay.setBounds (area.removeFromLeft (area.getWidth() * 3 / 5));
+    area.removeFromLeft (8);
+    synthPanel.setBounds (area);
 }

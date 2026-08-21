@@ -3,8 +3,8 @@
 #include <juce_audio_utils/juce_audio_utils.h>
 #include <atomic>
 
-// Synthesizes a click on each beat (same phase-accumulator-sine approach
-// SineWaveVoice uses for track playback, so no sample assets are needed).
+// Synthesizes a click on each beat (same phase-accumulator approach
+// SynthVoice uses for track playback, so no sample assets are needed).
 // Owned by AudioEngine and rendered directly into the output buffer,
 // independent of any track's mute/solo - it's a monitoring aid, not part of
 // the mix, and it never touches a track's input path so it can't bleed into

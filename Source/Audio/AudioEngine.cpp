@@ -159,6 +159,12 @@ void AudioEngine::mixTrackIntoOutput (TrackAudioSource& track, juce::AudioBuffer
     scratchBuffer.clear (0, numSamples);
     track.renderNextBlock (scratchBuffer, 0, numSamples, globalState, transportElapsedSamples, bpm, inputBuffer);
 
+    // Tapped pre-mute/pre-gain, so the visualiser shows what the track is
+    // actually producing even while muted (useful while sound-designing).
+    if (&track == visualiserTrack.load (std::memory_order_relaxed))
+        if (auto* tap = visualiserTap.load (std::memory_order_relaxed))
+            tap->pushBuffer (scratchBuffer);
+
     auto audible = ! track.isMuted() && (! anySoloed || track.isSoloed());
     auto gain = audible ? track.getVolume() : 0.0f;
 

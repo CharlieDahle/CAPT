@@ -5,6 +5,7 @@
 #include "../Core/Tempo.h"
 #include "../Tracks/TrackAudioSource.h"
 #include "../Dev/AudioInputSimulator.h"
+#include "AudioTap.h"
 #include "Metronome.h"
 #include <chrono>
 
@@ -49,6 +50,17 @@ public:
     bool isMetronomeEnabled() const { return metronome.isEnabled(); }
     void setMetronomeGain (float newGain) { metronome.setGain (newGain); }
 
+    // Whichever track's raw rendered output (pre-mute, pre-gain) should be
+    // pushed to tap, or nullptr for neither - the audio thread checks this
+    // by pointer identity once per track per block, so switching which
+    // track is being watched is just two atomic stores from the message
+    // thread. Pass {nullptr, nullptr} to stop tapping anything.
+    void setVisualiserTarget (TrackAudioSource* track, AudioTap* tap)
+    {
+        visualiserTrack.store (track);
+        visualiserTap.store (tap);
+    }
+
 private:
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override;
     void audioDeviceStopped() override {}
@@ -66,6 +78,9 @@ private:
 
     std::vector<TrackAudioSource*> tracks;
     juce::CriticalSection tracksLock;
+
+    std::atomic<TrackAudioSource*> visualiserTrack { nullptr };
+    std::atomic<AudioTap*> visualiserTap { nullptr };
 
     AudioInputSimulator audioInputSimulator;
     juce::AudioBuffer<float> simulatedInputScratch;

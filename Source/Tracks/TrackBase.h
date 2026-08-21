@@ -25,6 +25,11 @@ public:
     virtual void setTempoProvider (std::function<Tempo()> /*provider*/) {}
     virtual void quantize (int /*stepsPerBeat*/) {}
 
+    // No-op for tracks with no oscillator (AudioTrack) - only MidiTrack
+    // overrides these.
+    virtual void setWaveform (OscillatorWaveform /*newWaveform*/) {}
+    virtual OscillatorWaveform getWaveform() const { return OscillatorWaveform::Sine; }
+
     float getVolume() const override { return volume.load(); }
     void setVolume (float newVolume) { volume.store (newVolume); }
     bool isArmed() const override { return armed.load(); }
