@@ -11,6 +11,7 @@ public:
     TrackInspector();
 
     void showTrack (TrackBase* track);
+    void setGridSettingsProvider (std::function<GridSettings()> provider) { gridSettingsProvider = std::move (provider); }
 
     void paint (juce::Graphics& g) override { g.fillAll (juce::Colours::darkslategrey.darker (0.3f)); }
     void resized() override;
@@ -21,8 +22,11 @@ private:
     juce::Label headerLabel;
     juce::TextButton armButton;
     juce::TextButton typeButton;
+    juce::TextButton quantizeButton;
     juce::Slider volumeSlider;
     juce::Label busLabel;
     juce::Label effectsLabel;
     juce::Label soundLabel;
+
+    std::function<GridSettings()> gridSettingsProvider;
 };

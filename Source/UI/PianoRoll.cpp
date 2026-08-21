@@ -1,4 +1,5 @@
 #include "PianoRoll.h"
+#include "GridPainter.h"
 
 PianoRollCanvas::PianoRollCanvas()
 {
@@ -11,6 +12,10 @@ void PianoRollCanvas::paint (juce::Graphics& g)
 
     auto rh = rowHeight();
     auto stripW = keyStripW();
+
+    if (gridSettingsProvider != nullptr)
+        GridPainter::paintVerticalGridLines (g, getLocalBounds().toFloat(), stripW, gridSettingsProvider(),
+                                              juce::Colours::black.withAlpha (0.3f), juce::Colours::black.withAlpha (0.08f));
 
     if (expandedFlag)
     {
@@ -96,8 +101,8 @@ void PianoRollCanvas::mouseDown (const juce::MouseEvent& e)
     {
         Note newNote;
         newNote.pitch = yToPitch (e.position.y);
-        newNote.startSeconds = juce::jmax (0.0, xToSeconds (e.position.x));
-        newNote.endSeconds = newNote.startSeconds + 0.5;
+        newNote.startBeats = juce::jmax (0.0, xToBeats (e.position.x));
+        newNote.endBeats = newNote.startBeats + 1.0;
         notes.push_back (newNote);
         draggingIndex = (int) notes.size() - 1;
         dragStartNote = newNote;
@@ -114,18 +119,24 @@ void PianoRollCanvas::mouseDrag (const juce::MouseEvent& e)
         return;
 
     auto& note = notes[(size_t) draggingIndex];
-    auto deltaSeconds = (e.position.x - dragStartPos.x) / kPixelsPerSecond;
+    auto deltaBeats = (e.position.x - dragStartPos.x) / kPixelsPerBeat;
 
     if (dragMode == DragMode::move)
     {
-        auto length = dragStartNote.endSeconds - dragStartNote.startSeconds;
-        note.startSeconds = juce::jmax (0.0, dragStartNote.startSeconds + deltaSeconds);
-        note.endSeconds = note.startSeconds + length;
+        auto length = dragStartNote.endBeats - dragStartNote.startBeats;
+        auto rawStart = juce::jmax (0.0, dragStartNote.startBeats + deltaBeats);
+        note.startBeats = gridSettingsProvider != nullptr
+                             ? nearestGridBeats (rawStart, gridSettingsProvider().stepsPerBeat)
+                             : rawStart;
+        note.endBeats = note.startBeats + length;
         note.pitch = yToPitch (e.position.y);
     }
     else
     {
-        note.endSeconds = juce::jmax (note.startSeconds + 0.05, dragStartNote.endSeconds + deltaSeconds);
+        auto rawEnd = juce::jmax (note.startBeats + 0.05, dragStartNote.endBeats + deltaBeats);
+        note.endBeats = gridSettingsProvider != nullptr
+                           ? juce::jmax (note.startBeats + 0.05, nearestGridBeats (rawEnd, gridSettingsProvider().stepsPerBeat))
+                           : rawEnd;
     }
 
     repaint();
@@ -161,8 +172,8 @@ void PianoRollCanvas::mouseWheelMove (const juce::MouseEvent& e, const juce::Mou
 
 juce::Rectangle<float> PianoRollCanvas::noteBounds (const Note& note) const
 {
-    auto x = keyStripW() + (float) (note.startSeconds * kPixelsPerSecond);
-    auto width = juce::jmax (2.0f, (float) ((note.endSeconds - note.startSeconds) * kPixelsPerSecond));
+    auto x = keyStripW() + (float) (note.startBeats * kPixelsPerBeat);
+    auto width = juce::jmax (2.0f, (float) ((note.endBeats - note.startBeats) * kPixelsPerBeat));
     auto rh = rowHeight();
     return { x, noteTopY (note.pitch) + 0.5f, width, juce::jmax (2.0f, rh - 1.0f) };
 }

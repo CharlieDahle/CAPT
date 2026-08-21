@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Core/Types.h"
+#include "../Core/Tempo.h"
 #include "../UI/IconToggleButton.h"
 
 class TrackBase : public juce::Component
@@ -13,9 +14,12 @@ public:
     virtual void prepareToPlay (double sampleRate) = 0;
 
     // inputBuffer is this block's raw mic input, nullptr if unavailable;
-    // only AudioTrack uses it.
+    // only AudioTrack uses it. bpm is the current tempo, read fresh every
+    // block - only MidiTrack uses it (to convert between real time and beat
+    // positions); AudioTrack ignores it since recorded audio isn't
+    // tempo-relative.
     virtual void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
-                                   TransportState globalState, double elapsedSamples,
+                                   TransportState globalState, double elapsedSamples, double bpm,
                                    const juce::AudioBuffer<const float>* inputBuffer) = 0;
 
     virtual double getLastEventTimeSamples() const = 0;
@@ -24,6 +28,12 @@ public:
     virtual void fromXml (const juce::XmlElement& trackXml, const juce::File& audioFolder) = 0;
 
     virtual void injectTestNote (int /*noteNumber*/, float /*velocity*/, bool /*isNoteOn*/) {}
+
+    // No-op for tracks with nothing grid-aware (AudioTrack) - only MidiTrack
+    // overrides these.
+    virtual void setGridSettingsProvider (std::function<GridSettings()> /*provider*/) {}
+    virtual void setTempoProvider (std::function<Tempo()> /*provider*/) {}
+    virtual void quantize (int /*stepsPerBeat*/) {}
 
     float getVolume() const { return volume.load(); }
     void setVolume (float newVolume) { volume.store (newVolume); }

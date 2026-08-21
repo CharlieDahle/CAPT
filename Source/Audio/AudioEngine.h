@@ -2,8 +2,10 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Core/Types.h"
+#include "../Core/Tempo.h"
 #include "../Tracks/TrackBase.h"
 #include "../Dev/AudioInputSimulator.h"
+#include "Metronome.h"
 #include <chrono>
 
 // Owns the audio device, the track list, and the global transport - the
@@ -40,6 +42,13 @@ public:
 
     void startSimulatingAudioInput (std::vector<float> samples) { audioInputSimulator.start (std::move (samples)); }
 
+    void setTempo (Tempo tempo);
+    Tempo getTempo() const;
+
+    void setMetronomeEnabled (bool shouldBeEnabled) { metronome.setEnabled (shouldBeEnabled); }
+    bool isMetronomeEnabled() const { return metronome.isEnabled(); }
+    void setMetronomeGain (float newGain) { metronome.setGain (newGain); }
+
 private:
     void audioDeviceAboutToStart (juce::AudioIODevice* device) override;
     void audioDeviceStopped() override {}
@@ -50,7 +59,7 @@ private:
     void timerCallback() override;
 
     void mixTrackIntoOutput (TrackBase& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
-                              TransportState globalState, double transportElapsedSamples,
+                              TransportState globalState, double transportElapsedSamples, double bpm,
                               const juce::AudioBuffer<const float>* inputBuffer, bool anySoloed);
 
     juce::AudioDeviceManager deviceManager;
@@ -61,6 +70,11 @@ private:
     AudioInputSimulator audioInputSimulator;
     juce::AudioBuffer<float> simulatedInputScratch;
     juce::AudioBuffer<float> scratchBuffer;
+
+    Metronome metronome;
+    std::atomic<double> tempoBpm { 120.0 };
+    std::atomic<int> tempoNumerator { 4 };
+    std::atomic<int> tempoDenominator { 4 };
 
     std::atomic<TransportState> requestedState { TransportState::Idle };
     TransportState currentState = TransportState::Idle;

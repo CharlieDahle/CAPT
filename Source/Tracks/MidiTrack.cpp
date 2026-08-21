@@ -27,26 +27,25 @@ void MidiTrack::prepareToPlay (double sampleRate)
 std::vector<PianoRollView::Note> MidiTrack::getRecordedNotesSnapshot() const
 {
     auto count = numRecordedEvents.load();
-    std::map<int, double> openNoteStartSeconds;
+    std::map<int, double> openNoteStartBeats;
     std::vector<PianoRollView::Note> notes;
 
     for (int i = 0; i < count; ++i)
     {
         const auto& event = recordedEvents[(size_t) i];
-        auto seconds = event.timeStampSamples / currentSampleRate;
 
         if (event.isNoteOn)
         {
-            openNoteStartSeconds[event.noteNumber] = seconds;
+            openNoteStartBeats[event.noteNumber] = event.beatPosition;
             continue;
         }
 
-        auto it = openNoteStartSeconds.find (event.noteNumber);
-        if (it == openNoteStartSeconds.end())
+        auto it = openNoteStartBeats.find (event.noteNumber);
+        if (it == openNoteStartBeats.end())
             continue;
 
-        notes.push_back ({ event.noteNumber, it->second, seconds, event.velocity });
-        openNoteStartSeconds.erase (it);
+        notes.push_back ({ event.noteNumber, it->second, event.beatPosition, event.velocity });
+        openNoteStartBeats.erase (it);
     }
 
     return notes;
@@ -61,13 +60,13 @@ void MidiTrack::setNotesFromEditor (const std::vector<PianoRollView::Note>& note
 
     for (auto& note : notes)
     {
-        events.push_back ({ note.startSeconds * currentSampleRate, note.pitch, note.velocity, true });
-        events.push_back ({ note.endSeconds * currentSampleRate, note.pitch, note.velocity, false });
+        events.push_back ({ note.startBeats, note.pitch, note.velocity, true });
+        events.push_back ({ note.endBeats, note.pitch, note.velocity, false });
     }
 
     std::sort (events.begin(), events.end(),
                [] (const RecordedNoteEvent& a, const RecordedNoteEvent& b)
-               { return a.timeStampSamples < b.timeStampSamples; });
+               { return a.beatPosition < b.beatPosition; });
 
     auto count = juce::jmin ((int) events.size(), maxRecordedEvents);
 
@@ -78,7 +77,7 @@ void MidiTrack::setNotesFromEditor (const std::vector<PianoRollView::Note>& note
 }
 
 void MidiTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
-                                  TransportState globalState, double elapsedSamples,
+                                  TransportState globalState, double elapsedSamples, double bpm,
                                   const juce::AudioBuffer<const float>*)
 {
     lastGlobalState.store (globalState);
@@ -98,7 +97,7 @@ void MidiTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSamp
         // Recording stopped mid-note: the note-on made it into
         // recordedEvents but the note-off never will - close it out now.
         if (previousEffectiveMode == TransportState::Recording)
-            closeOutHeldRecordingNotes (elapsedSamples);
+            closeOutHeldRecordingNotes (elapsedSamples, bpm);
 
         if (effectiveMode == TransportState::Playing)
             nextPlaybackIndex = 0;
@@ -113,12 +112,20 @@ void MidiTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSamp
 
     juce::MidiBuffer midiForSynth;
 
+    // Every stored event is a beat position - converting it to a target
+    // sample using the tempo active *right now* (not whatever it was when
+    // the note was recorded) is what makes playback speed up/slow down
+    // immediately on a live tempo change.
+    Tempo tempo;
+    tempo.bpm = bpm;
+
     if (effectiveMode == TransportState::Playing)
     {
         while (nextPlaybackIndex < numRecordedEvents)
         {
             const auto& event = recordedEvents[(size_t) nextPlaybackIndex];
-            auto samplesFromNow = event.timeStampSamples - elapsedSamples;
+            auto eventSamples = beatsToSeconds (event.beatPosition, tempo) * currentSampleRate;
+            auto samplesFromNow = eventSamples - elapsedSamples;
 
             if (samplesFromNow >= numSamples)
                 break;
@@ -148,7 +155,8 @@ void MidiTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSamp
             auto message = metadata.getMessage();
             auto& slot = recordedEvents[(size_t) numRecordedEvents];
 
-            slot.timeStampSamples = elapsedSamples + metadata.samplePosition;
+            auto eventSeconds = (elapsedSamples + metadata.samplePosition) / currentSampleRate;
+            slot.beatPosition = secondsToBeats (eventSeconds, tempo);
             slot.noteNumber = message.getNoteNumber();
             slot.velocity = message.getFloatVelocity();
             slot.isNoteOn = message.isNoteOn();
@@ -166,6 +174,20 @@ void MidiTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSamp
     synth.renderNextBlock (buffer, midiForSynth, startSample, numSamples);
 }
 
+void MidiTrack::quantize (int stepsPerBeat)
+{
+    auto notes = getRecordedNotesSnapshot();
+
+    for (auto& note : notes)
+    {
+        auto length = juce::jmax (0.05, note.endBeats - note.startBeats);
+        note.startBeats = nearestGridBeats (note.startBeats, stepsPerBeat);
+        note.endBeats = note.startBeats + length;
+    }
+
+    setNotesFromEditor (notes);
+}
+
 void MidiTrack::injectTestNote (int noteNumber, float velocity, bool isNoteOn)
 {
     if (isNoteOn)
@@ -177,7 +199,12 @@ void MidiTrack::injectTestNote (int noteNumber, float velocity, bool isNoteOn)
 double MidiTrack::getLastEventTimeSamples() const
 {
     auto count = numRecordedEvents.load();
-    return count > 0 ? recordedEvents[(size_t) (count - 1)].timeStampSamples : 0.0;
+
+    if (count == 0)
+        return 0.0;
+
+    auto tempo = tempoProvider != nullptr ? tempoProvider() : Tempo{};
+    return beatsToSeconds (recordedEvents[(size_t) (count - 1)].beatPosition, tempo) * currentSampleRate;
 }
 
 std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
@@ -191,7 +218,7 @@ std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
     {
         const auto& event = recordedEvents[(size_t) i];
         auto* eventXml = trackXml->createNewChildElement ("EVENT");
-        eventXml->setAttribute ("time", event.timeStampSamples);
+        eventXml->setAttribute ("beat", event.beatPosition);
         eventXml->setAttribute ("note", event.noteNumber);
         eventXml->setAttribute ("velocity", (double) event.velocity);
         eventXml->setAttribute ("on", event.isNoteOn);
@@ -212,7 +239,7 @@ void MidiTrack::fromXml (const juce::XmlElement& trackXml, const juce::File&)
             break;
 
         auto& slot = recordedEvents[(size_t) count];
-        slot.timeStampSamples = eventXml->getDoubleAttribute ("time");
+        slot.beatPosition = eventXml->getDoubleAttribute ("beat");
         slot.noteNumber = eventXml->getIntAttribute ("note");
         slot.velocity = (float) eventXml->getDoubleAttribute ("velocity");
         slot.isNoteOn = eventXml->getBoolAttribute ("on");
@@ -222,15 +249,19 @@ void MidiTrack::fromXml (const juce::XmlElement& trackXml, const juce::File&)
     numRecordedEvents.store (count);
 }
 
-void MidiTrack::closeOutHeldRecordingNotes (double stopTimeSamples)
+void MidiTrack::closeOutHeldRecordingNotes (double stopTimeSamples, double bpm)
 {
+    Tempo tempo;
+    tempo.bpm = bpm;
+    auto stopBeats = secondsToBeats (stopTimeSamples / currentSampleRate, tempo);
+
     for (auto note : heldRecordingNotes)
     {
         if (numRecordedEvents >= maxRecordedEvents)
             break;
 
         auto& slot = recordedEvents[(size_t) numRecordedEvents];
-        slot.timeStampSamples = stopTimeSamples;
+        slot.beatPosition = stopBeats;
         slot.noteNumber = note;
         slot.velocity = 0.0f;
         slot.isNoteOn = false;

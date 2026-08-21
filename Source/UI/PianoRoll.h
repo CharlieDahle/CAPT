@@ -2,6 +2,7 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Core/Types.h"
+#include "../Core/Tempo.h"
 
 // Draws a track's recorded MIDI notes as horizontal bars, editable with the
 // mouse only while editableProvider says the transport is idle - that's
@@ -17,8 +18,8 @@ public:
     struct Note
     {
         int pitch = 60;
-        double startSeconds = 0.0;
-        double endSeconds = 0.5;
+        double startBeats = 0.0;
+        double endBeats = 1.0;
         float velocity = 0.8f;
     };
 
@@ -29,6 +30,7 @@ public:
     void setEditableProvider (std::function<bool()> provider) { editableProvider = std::move (provider); }
 
     void setLaneClickHandler (std::function<void()> handler) { laneClickHandler = std::move (handler); }
+    void setGridSettingsProvider (std::function<GridSettings()> provider) { gridSettingsProvider = std::move (provider); }
 
     void setSelectedFlag (bool newSelected) { selectedFlag = newSelected; }
 
@@ -66,7 +68,7 @@ private:
 
     float noteTopY (int pitch) const;
     int yToPitch (float y) const;
-    double xToSeconds (float x) const { return (x - keyStripW()) / kPixelsPerSecond; }
+    double xToBeats (float x) const { return (x - keyStripW()) / kPixelsPerBeat; }
 
     void drawKeyboardStrip (juce::Graphics& g, float rh);
 
@@ -79,6 +81,7 @@ private:
     std::function<void (std::vector<Note>)> editCallback;
     std::function<bool()> editableProvider;
     std::function<void()> laneClickHandler;
+    std::function<GridSettings()> gridSettingsProvider;
     bool selectedFlag = false;
     bool expandedFlag = false;
     bool wasIdleLastTick = false;
@@ -110,6 +113,7 @@ public:
     void setEditCallback (std::function<void (std::vector<Note>)> callback) { canvas.setEditCallback (std::move (callback)); }
     void setEditableProvider (std::function<bool()> provider) { canvas.setEditableProvider (std::move (provider)); }
     void setLaneClickHandler (std::function<void()> handler) { canvas.setLaneClickHandler (std::move (handler)); }
+    void setGridSettingsProvider (std::function<GridSettings()> provider) { canvas.setGridSettingsProvider (std::move (provider)); }
     void setSelected (bool newSelected) { canvas.setSelectedFlag (newSelected); }
 
     void setExpanded (bool newExpanded);

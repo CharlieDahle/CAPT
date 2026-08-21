@@ -13,13 +13,15 @@ public:
     void prepareToPlay (double sampleRate) override { currentSampleRate = sampleRate; }
 
     void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
-                           TransportState globalState, double elapsedSamples,
+                           TransportState globalState, double elapsedSamples, double bpm,
                            const juce::AudioBuffer<const float>* inputBuffer) override;
 
     double getLastEventTimeSamples() const override;
 
     std::unique_ptr<juce::XmlElement> toXml (const juce::File& audioFolder) const override;
     void fromXml (const juce::XmlElement& trackXml, const juce::File& audioFolder) override;
+
+    void setGridSettingsProvider (std::function<GridSettings()> provider) override { gridSettingsProvider = std::move (provider); }
 
     void paint (juce::Graphics& g) override;
 
@@ -35,6 +37,7 @@ private:
     juce::Label placeholderLabel;
     std::atomic<float> currentLevel { 0.0f };
     LevelMeter levelMeter { currentLevel };
+    std::function<GridSettings()> gridSettingsProvider;
 
     // recordedSamples is written on the audio thread while recording and
     // read from the message thread on Save/Load - every access to it goes

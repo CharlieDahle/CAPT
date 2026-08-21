@@ -25,6 +25,14 @@ TrackInspector::TrackInspector()
     };
     addAndMakeVisible (typeButton);
 
+    quantizeButton.setButtonText ("Quantize");
+    quantizeButton.onClick = [this]
+    {
+        if (currentTrack != nullptr && gridSettingsProvider != nullptr)
+            currentTrack->quantize (gridSettingsProvider().stepsPerBeat);
+    };
+    addAndMakeVisible (quantizeButton);
+
     volumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
     volumeSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
     volumeSlider.setRange (0.0, 1.0);
@@ -55,6 +63,7 @@ void TrackInspector::showTrack (TrackBase* track)
     armButton.setEnabled (hasTrack);
     typeButton.setEnabled (hasTrack);
     volumeSlider.setEnabled (hasTrack);
+    quantizeButton.setEnabled (hasTrack && track->getType() == TrackType::Midi);
 
     if (! hasTrack)
     {
@@ -79,6 +88,7 @@ void TrackInspector::resized()
     controlsRow.flexDirection = juce::FlexBox::Direction::row;
     controlsRow.items.add (juce::FlexItem (armButton).withWidth (100).withMargin (4));
     controlsRow.items.add (juce::FlexItem (typeButton).withWidth (70).withMargin (4));
+    controlsRow.items.add (juce::FlexItem (quantizeButton).withWidth (90).withMargin (4));
     controlsRow.items.add (juce::FlexItem (volumeSlider).withFlex (1).withMargin (4));
     controlsRow.performLayout (controlsArea);
 

@@ -15,9 +15,15 @@ target_sources(CAPT
         Source/MicrophonePermission.mm
 
         Source/Core/Types.h
+        Source/Core/Tempo.h
+        Source/Core/Tempo.cpp
 
         Source/UI/IconToggleButton.h
         Source/UI/LevelMeter.h
+        Source/UI/GridPainter.h
+        Source/UI/GridPainter.cpp
+        Source/UI/TimelineRuler.h
+        Source/UI/TimelineRuler.cpp
         Source/UI/PianoRoll.h
         Source/UI/PianoRoll.cpp
         Source/UI/TrackInspector.h
@@ -36,6 +42,8 @@ target_sources(CAPT
 
         Source/Audio/AudioEngine.h
         Source/Audio/AudioEngine.cpp
+        Source/Audio/Metronome.h
+        Source/Audio/Metronome.cpp
 
         Source/Dev/MelodyInjector.h
         Source/Dev/MelodyInjector.cpp

@@ -38,6 +38,22 @@ void AudioEngine::start()
     startTimerHz (1);
 }
 
+void AudioEngine::setTempo (Tempo tempo)
+{
+    tempoBpm.store (tempo.bpm);
+    tempoNumerator.store (tempo.timeSignature.numerator);
+    tempoDenominator.store (tempo.timeSignature.denominator);
+}
+
+Tempo AudioEngine::getTempo() const
+{
+    Tempo tempo;
+    tempo.bpm = tempoBpm.load();
+    tempo.timeSignature.numerator = tempoNumerator.load();
+    tempo.timeSignature.denominator = tempoDenominator.load();
+    return tempo;
+}
+
 std::unique_ptr<TrackBase> AudioEngine::replaceTrack (int index, std::unique_ptr<TrackBase> newTrack)
 {
     newTrack->prepareToPlay (currentSampleRate);
@@ -57,6 +73,7 @@ void AudioEngine::audioDeviceAboutToStart (juce::AudioIODevice* device)
 
     scratchBuffer.setSize (2, device->getCurrentBufferSizeSamples());
     simulatedInputScratch.setSize (1, device->getCurrentBufferSizeSamples());
+    metronome.prepareToPlay (currentSampleRate);
 
     expectedCallbackIntervalMs = 1000.0 * (double) device->getCurrentBufferSizeSamples() / currentSampleRate;
 
@@ -109,6 +126,8 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
         currentState = desiredState;
     }
 
+    auto bpm = tempoBpm.load();
+
     {
         // Tracks can be replaced from the message thread while this runs
         // (type toggle, load), so guard the vector itself.
@@ -120,8 +139,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
                 anySoloed = true;
 
         for (auto& track : tracks)
-            mixTrackIntoOutput (*track, outputBuffer, numSamples, currentState, elapsedNow, &inputBuffer, anySoloed);
+            mixTrackIntoOutput (*track, outputBuffer, numSamples, currentState, elapsedNow, bpm, &inputBuffer, anySoloed);
     }
+
+    metronome.renderNextBlock (outputBuffer, numSamples, elapsedNow, currentState != TransportState::Idle,
+                                bpm, tempoNumerator.load());
 
     if (currentState != TransportState::Idle)
         elapsedSamples.store (elapsedNow + numSamples);
@@ -135,11 +157,11 @@ void AudioEngine::audioDeviceIOCallbackWithContext (const float* const* inputCha
 }
 
 void AudioEngine::mixTrackIntoOutput (TrackBase& track, juce::AudioBuffer<float>& outputBuffer, int numSamples,
-                                       TransportState globalState, double transportElapsedSamples,
+                                       TransportState globalState, double transportElapsedSamples, double bpm,
                                        const juce::AudioBuffer<const float>* inputBuffer, bool anySoloed)
 {
     scratchBuffer.clear (0, numSamples);
-    track.renderNextBlock (scratchBuffer, 0, numSamples, globalState, transportElapsedSamples, inputBuffer);
+    track.renderNextBlock (scratchBuffer, 0, numSamples, globalState, transportElapsedSamples, bpm, inputBuffer);
 
     auto audible = ! track.isMuted() && (! anySoloed || track.isSoloed());
     auto gain = audible ? track.getVolume() : 0.0f;

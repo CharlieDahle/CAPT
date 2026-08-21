@@ -80,10 +80,22 @@ public:
     void setNotesFromEditor (const std::vector<PianoRollView::Note>& notes);
 
     void renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
-                           TransportState globalState, double elapsedSamples,
+                           TransportState globalState, double elapsedSamples, double bpm,
                            const juce::AudioBuffer<const float>*) override;
 
     void injectTestNote (int noteNumber, float velocity, bool isNoteOn) override;
+
+    void setGridSettingsProvider (std::function<GridSettings()> provider) override
+    {
+        pianoRollView.setGridSettingsProvider (std::move (provider));
+    }
+
+    // Retained (not just forwarded) - needed on the message thread by
+    // getLastEventTimeSamples() to convert the last recorded beat position
+    // back to samples using the current tempo.
+    void setTempoProvider (std::function<Tempo()> provider) override { tempoProvider = std::move (provider); }
+
+    void quantize (int stepsPerBeat) override;
 
     double getLastEventTimeSamples() const override;
 
@@ -97,12 +109,13 @@ protected:
     void expandedChanged (bool isExpandedNow) override { pianoRollView.setExpanded (isExpandedNow); }
 
 private:
-    void closeOutHeldRecordingNotes (double stopTimeSamples);
+    void closeOutHeldRecordingNotes (double stopTimeSamples, double bpm);
 
     juce::MidiKeyboardState keyboardState;
     PianoRollView pianoRollView;
     juce::Synthesiser synth;
     double currentSampleRate = 44100.0;
+    std::function<Tempo()> tempoProvider;
     std::atomic<TransportState> lastGlobalState { TransportState::Idle };
 
     int nextPlaybackIndex = 0;

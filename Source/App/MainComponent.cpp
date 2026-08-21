@@ -1,6 +1,7 @@
 #include "MainComponent.h"
 #include "../Tracks/TrackFactory.h"
 #include "../Project/ProjectFile.h"
+#include <iterator>
 
 MainComponent::MainComponent()
 {
@@ -28,12 +29,84 @@ MainComponent::MainComponent()
     addAndMakeVisible (simulateAudioButton);
     simulateAudioButton.onClick = [this] { simulateAudioButtonClicked(); };
 
+    metronomeButton.setButtonText ("Metronome");
+    metronomeButton.setClickingTogglesState (true);
+    metronomeButton.setToggleState (false, juce::dontSendNotification);
+    metronomeButton.onClick = [this] { engine.setMetronomeEnabled (metronomeButton.getToggleState()); };
+    addAndMakeVisible (metronomeButton);
+
     audioFormatManager.registerBasicFormats();
 
     timeLabel.setText ("0:00 / 0:00", juce::dontSendNotification);
     addAndMakeVisible (timeLabel);
 
+    bpmLabel.setText ("BPM", juce::dontSendNotification);
+    addAndMakeVisible (bpmLabel);
+
+    bpmSlider.setSliderStyle (juce::Slider::IncDecButtons);
+    bpmSlider.setRange (20.0, 300.0, 1.0);
+    bpmSlider.setValue (engine.getTempo().bpm, juce::dontSendNotification);
+    bpmSlider.onValueChange = [this]
+    {
+        auto tempo = engine.getTempo();
+        tempo.bpm = bpmSlider.getValue();
+        engine.setTempo (tempo);
+        repaint();
+    };
+    addAndMakeVisible (bpmSlider);
+
+    timeSignatureBox.addItem ("4/4", 1);
+    timeSignatureBox.addItem ("3/4", 2);
+    timeSignatureBox.addItem ("2/4", 3);
+    timeSignatureBox.addItem ("6/8", 4);
+    timeSignatureBox.addItem ("5/4", 5);
+    timeSignatureBox.addItem ("7/8", 6);
+    timeSignatureBox.setSelectedId (1, juce::dontSendNotification);
+    timeSignatureBox.onChange = [this]
+    {
+        static const TimeSignature options[] = { { 4, 4 }, { 3, 4 }, { 2, 4 }, { 6, 8 }, { 5, 4 }, { 7, 8 } };
+        auto index = timeSignatureBox.getSelectedId() - 1;
+
+        if (index >= 0 && index < (int) std::size (options))
+        {
+            auto tempo = engine.getTempo();
+            tempo.timeSignature = options[(size_t) index];
+            engine.setTempo (tempo);
+        }
+
+        repaint();
+    };
+    addAndMakeVisible (timeSignatureBox);
+
+    gridResolutionBox.addItem ("1/4", 1);
+    gridResolutionBox.addItem ("1/8", 2);
+    gridResolutionBox.addItem ("1/16", 3);
+    gridResolutionBox.addItem ("1/32", 4);
+    gridResolutionBox.setSelectedId (3, juce::dontSendNotification);
+    gridResolutionBox.onChange = [this]
+    {
+        static const int options[] = { 1, 2, 4, 8 };
+        auto index = gridResolutionBox.getSelectedId() - 1;
+
+        if (index >= 0 && index < (int) std::size (options))
+            gridStepsPerBeat = options[(size_t) index];
+
+        repaint();
+    };
+    addAndMakeVisible (gridResolutionBox);
+
+    metronomeVolumeSlider.setSliderStyle (juce::Slider::LinearHorizontal);
+    metronomeVolumeSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+    metronomeVolumeSlider.setRange (0.0, 1.0);
+    metronomeVolumeSlider.setValue (0.3, juce::dontSendNotification);
+    metronomeVolumeSlider.onValueChange = [this] { engine.setMetronomeGain ((float) metronomeVolumeSlider.getValue()); };
+    addAndMakeVisible (metronomeVolumeSlider);
+
+    addAndMakeVisible (timelineRuler);
+    timelineRuler.setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
+
     addAndMakeVisible (trackInspector);
+    trackInspector.setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
 
     tracksContainer.attachTracks (&engine.getTracks());
     tracksViewport.setViewedComponent (&tracksContainer, false);
@@ -47,6 +120,8 @@ MainComponent::MainComponent()
         track->onTypeToggleRequested = [this, i] { toggleTrackType (i); };
         track->onSelected = [this, i] { selectTrack (i); };
         track->onExpandToggleRequested = [this, i] { toggleExpand (i); };
+        track->setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
+        track->setTempoProvider ([this] { return engine.getTempo(); });
         engine.addTrack (std::move (track));
     }
 
@@ -74,8 +149,13 @@ void MainComponent::paintOverChildren (juce::Graphics& g)
     if (tracksArea.isEmpty())
         return;
 
+    // Grid lines are drawn per-track (MidiTrack via its PianoRollCanvas,
+    // AudioTrack in its own paint()) rather than as one overlay here, so
+    // they naturally stay confined to each track's content area - never
+    // crossing a header, never extending past the last track.
     auto elapsedSeconds = engine.getElapsedSamples() / engine.getCurrentSampleRate();
-    auto x = tracksArea.getX() + (int) kKeyboardStripWidth + (int) (elapsedSeconds * kPixelsPerSecond);
+    auto elapsedBeats = secondsToBeats (elapsedSeconds, engine.getTempo());
+    auto x = tracksArea.getX() + (int) kKeyboardStripWidth + (int) (elapsedBeats * kPixelsPerBeat);
 
     if (x < tracksArea.getX() || x > tracksArea.getRight())
         return;
@@ -97,11 +177,24 @@ void MainComponent::resized()
     topRow.items.add (juce::FlexItem (loadButton).withWidth (90).withMargin (5));
     topRow.items.add (juce::FlexItem (simulateButton).withWidth (140).withMargin (5));
     topRow.items.add (juce::FlexItem (simulateAudioButton).withWidth (170).withMargin (5));
+    topRow.items.add (juce::FlexItem (metronomeButton).withWidth (110).withMargin (5));
     topRow.items.add (juce::FlexItem (timeLabel).withWidth (120).withMargin (5));
     topRow.performLayout (topRowArea);
 
+    auto gridRowArea = area.removeFromTop (32);
+    juce::FlexBox gridRow;
+    gridRow.flexDirection = juce::FlexBox::Direction::row;
+    gridRow.items.add (juce::FlexItem (bpmLabel).withWidth (36).withMargin (4));
+    gridRow.items.add (juce::FlexItem (bpmSlider).withWidth (110).withMargin (4));
+    gridRow.items.add (juce::FlexItem (timeSignatureBox).withWidth (80).withMargin (4));
+    gridRow.items.add (juce::FlexItem (gridResolutionBox).withWidth (80).withMargin (4));
+    gridRow.items.add (juce::FlexItem (metronomeVolumeSlider).withWidth (140).withMargin (4));
+    gridRow.performLayout (gridRowArea);
+
     auto inspectorHeight = juce::jmin (280, area.getHeight() / 3);
     trackInspector.setBounds (area.removeFromBottom (inspectorHeight));
+
+    timelineRuler.setBounds (area.removeFromTop (24));
 
     tracksArea = area;
     tracksViewport.setBounds (area);
@@ -127,7 +220,8 @@ void MainComponent::repaintPlayhead (double elapsedSeconds)
     if (tracksArea.isEmpty())
         return;
 
-    auto x = tracksArea.getX() + (int) kKeyboardStripWidth + (int) (elapsedSeconds * kPixelsPerSecond);
+    auto elapsedBeats = secondsToBeats (elapsedSeconds, engine.getTempo());
+    auto x = tracksArea.getX() + (int) kKeyboardStripWidth + (int) (elapsedBeats * kPixelsPerBeat);
     auto previous = previousPlayheadX < 0 ? x : previousPlayheadX;
     auto lo = juce::jmin (x, previous) - 3;
     auto hi = juce::jmax (x, previous) + 3;
@@ -216,12 +310,23 @@ void MainComponent::replaceTrack (int index, TrackType newType)
     newTrack->onTypeToggleRequested = [this, index] { toggleTrackType (index); };
     newTrack->onSelected = [this, index] { selectTrack (index); };
     newTrack->onExpandToggleRequested = [this, index] { toggleExpand (index); };
+    newTrack->setGridSettingsProvider ([this] { return GridSettings { engine.getTempo().timeSignature, gridStepsPerBeat }; });
+    newTrack->setTempoProvider ([this] { return engine.getTempo(); });
     newTrack->setExpanded (index == expandedTrackIndex);
     tracksContainer.addAndMakeVisible (*newTrack);
 
     auto oldTrack = engine.replaceTrack (index, std::move (newTrack));
 
     tracksContainer.removeChildComponent (oldTrack.get());
+
+    // resized() below calls tracksContainer.setSize(), but a type swap
+    // never changes track count or which index is expanded, so the total
+    // height is always identical before/after - setSize() is a no-op in
+    // that case and never cascades into TracksContainer::resized() (same
+    // gotcha documented on TracksContainer::setExpandedIndex), leaving the
+    // freshly-added replacement track at its default zero size. Lay it out
+    // directly rather than relying on that cascade.
+    tracksContainer.resized();
     resized();
 
     // The replaced track is a new object - re-point the inspector and

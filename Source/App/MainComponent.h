@@ -2,9 +2,11 @@
 
 #include <juce_audio_utils/juce_audio_utils.h>
 #include "../Core/Types.h"
+#include "../Core/Tempo.h"
 #include "../Audio/AudioEngine.h"
 #include "../UI/TracksContainer.h"
 #include "../UI/TrackInspector.h"
+#include "../UI/TimelineRuler.h"
 #include "../Dev/MelodyInjector.h"
 
 class MainComponent : public juce::Component,
@@ -54,6 +56,15 @@ private:
     juce::AudioFormatManager audioFormatManager;
 
     AudioEngine engine;
+
+    juce::TextButton metronomeButton;
+    juce::Label bpmLabel;
+    juce::Slider bpmSlider;
+    juce::ComboBox timeSignatureBox;
+    juce::ComboBox gridResolutionBox;
+    juce::Slider metronomeVolumeSlider;
+    TimelineRuler timelineRuler;
+    int gridStepsPerBeat = 4;
 
     juce::Rectangle<int> tracksArea;
     int previousPlayheadX = -1;

@@ -50,7 +50,7 @@ void TrackBase::paint (juce::Graphics& g)
     // Same reserved gutter as the piano roll below - keeps the left
     // margin reading as space outside the track's box, not part of it.
     g.setColour (juce::Colours::darkslategrey);
-    g.fillRect (0, 0, (int) kKeyboardStripWidth, 20);
+    g.fillRect (0, 0, (int) kKeyboardStripWidth, (int) kTrackHeaderHeight);
 }
 
 void TrackBase::mouseDown (const juce::MouseEvent&)
@@ -68,7 +68,7 @@ void TrackBase::mouseDoubleClick (const juce::MouseEvent&)
 void TrackBase::resized()
 {
     auto area = getLocalBounds();
-    auto headerArea = area.removeFromTop (20);
+    auto headerArea = area.removeFromTop ((int) kTrackHeaderHeight);
     headerArea.removeFromLeft ((int) kKeyboardStripWidth);
     nameLabel.setBounds (headerArea);
     resizedContent (area);

@@ -1,4 +1,5 @@
 #include "AudioTrack.h"
+#include "../UI/GridPainter.h"
 
 AudioTrack::AudioTrack (const juce::String& trackName)
     : TrackBase (trackName, TrackType::Audio)
@@ -13,7 +14,7 @@ AudioTrack::AudioTrack (const juce::String& trackName)
 }
 
 void AudioTrack::renderNextBlock (juce::AudioBuffer<float>& buffer, int startSample, int numSamples,
-                                   TransportState globalState, double elapsedSamples,
+                                   TransportState globalState, double elapsedSamples, double /*bpm*/,
                                    const juce::AudioBuffer<const float>* inputBuffer)
 {
     if (isArmed() && inputBuffer != nullptr && inputBuffer->getNumChannels() > 0)
@@ -116,8 +117,15 @@ void AudioTrack::paint (juce::Graphics& g)
 {
     TrackBase::paint (g);
 
+    if (gridSettingsProvider != nullptr)
+    {
+        juce::Rectangle<float> contentArea (0.0f, kTrackHeaderHeight, (float) getWidth(), (float) getHeight() - kTrackHeaderHeight);
+        GridPainter::paintVerticalGridLines (g, contentArea, kKeyboardStripWidth, gridSettingsProvider(),
+                                              juce::Colours::black.withAlpha (0.3f), juce::Colours::black.withAlpha (0.08f));
+    }
+
     g.setColour (juce::Colours::darkslategrey);
-    g.fillRect (0, 20, (int) kKeyboardStripWidth, getHeight() - 20);
+    g.fillRect (0, (int) kTrackHeaderHeight, (int) kKeyboardStripWidth, getHeight() - (int) kTrackHeaderHeight);
 }
 
 void AudioTrack::resizedContent (juce::Rectangle<int> contentArea)
