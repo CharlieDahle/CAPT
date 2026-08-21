@@ -11,7 +11,41 @@ juce_add_gui_app(CAPT
 target_sources(CAPT
     PRIVATE
         Source/Main.cpp
-        Source/MicrophonePermission.mm)
+        Source/MicrophonePermission.h
+        Source/MicrophonePermission.mm
+
+        Source/Core/Types.h
+
+        Source/UI/IconToggleButton.h
+        Source/UI/LevelMeter.h
+        Source/UI/PianoRoll.h
+        Source/UI/PianoRoll.cpp
+        Source/UI/TrackInspector.h
+        Source/UI/TrackInspector.cpp
+        Source/UI/TracksContainer.h
+        Source/UI/TracksContainer.cpp
+
+        Source/Tracks/TrackBase.h
+        Source/Tracks/TrackBase.cpp
+        Source/Tracks/MidiTrack.h
+        Source/Tracks/MidiTrack.cpp
+        Source/Tracks/AudioTrack.h
+        Source/Tracks/AudioTrack.cpp
+        Source/Tracks/TrackFactory.h
+        Source/Tracks/TrackFactory.cpp
+
+        Source/Audio/AudioEngine.h
+        Source/Audio/AudioEngine.cpp
+
+        Source/Dev/MelodyInjector.h
+        Source/Dev/MelodyInjector.cpp
+        Source/Dev/AudioInputSimulator.h
+
+        Source/Project/ProjectFile.h
+        Source/Project/ProjectFile.cpp
+
+        Source/App/MainComponent.h
+        Source/App/MainComponent.cpp)
 
 target_compile_definitions(CAPT
     PRIVATE
