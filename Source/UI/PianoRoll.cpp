@@ -407,6 +407,14 @@ juce::MouseCursor PianoRollCanvas::getMouseCursor()
     return juce::MouseCursor::NormalCursor;
 }
 
+void PianoRollCanvas::refreshNotes()
+{
+    if (dragMode == DragMode::none && notesProvider != nullptr)
+        notes = notesProvider();
+
+    repaint();
+}
+
 PianoRollCanvas::Note PianoRollCanvas::placementNoteAt (juce::Point<float> position) const
 {
     Note note;

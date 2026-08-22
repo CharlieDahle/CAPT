@@ -30,6 +30,14 @@ public:
     // knows where "now" is.
     virtual void setPlayheadBeatsProvider (std::function<double()> /*provider*/) {}
 
+    // No-op for tracks whose view isn't a separate cached copy of their data
+    // (AudioTrack) - only MidiTrack overrides this. Call once right after
+    // fromXml() writes new data directly into a track, bypassing whatever
+    // local UI-owned copy the editor keeps - otherwise that copy stays
+    // stale until something unrelated (e.g. pressing Play) happens to
+    // trigger its own idle-to-active refresh.
+    virtual void refreshEditorContents() {}
+
     // No-op for tracks with no oscillator (AudioTrack) - only MidiTrack
     // overrides these.
     virtual void setWaveform (OscillatorWaveform /*newWaveform*/) {}
@@ -45,7 +53,9 @@ public:
     bool isArmed() const override { return armed.load(); }
     void setArmed (bool newArmed) { armed.store (newArmed); }
     bool isMuted() const override { return muted.load(); }
+    void setMuted (bool newMuted) { muted.store (newMuted); muteButton.setToggleState (newMuted, juce::dontSendNotification); }
     bool isSoloed() const override { return soloed.load(); }
+    void setSoloed (bool newSoloed) { soloed.store (newSoloed); soloButton.setToggleState (newSoloed, juce::dontSendNotification); }
     TrackType getType() const { return trackType; }
     juce::String getTrackName() const { return nameLabel.getText(); }
 
@@ -84,6 +94,15 @@ protected:
 
     void setVolumeFromXml (double newVolume) { volume.store ((float) newVolume); }
     void writeVolumeAttribute (juce::XmlElement& trackXml) const { trackXml.setAttribute ("volume", (double) volume.load()); }
+
+    // Shared by MidiTrack::toXml/fromXml and AudioTrack::toXml/fromXml -
+    // setMuted/setSoloed above already handle keeping the header buttons in
+    // sync, so fromXml just needs to call them with the loaded values.
+    void writeMuteSoloAttributes (juce::XmlElement& trackXml) const
+    {
+        trackXml.setAttribute ("muted", muted.load());
+        trackXml.setAttribute ("soloed", soloed.load());
+    }
 
 private:
     TrackType trackType;

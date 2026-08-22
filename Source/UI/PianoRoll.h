@@ -41,6 +41,11 @@ public:
     // Where Cmd+V drops pasted notes.
     void setPlayheadBeatsProvider (std::function<double()> provider) { playheadBeatsProvider = std::move (provider); }
 
+    // Forces an immediate pull from notesProvider(), bypassing the timer's
+    // steady-state-idle skip - needed right after something outside this
+    // component's own edits (project load) writes new data into the track.
+    void refreshNotes();
+
     void setSelectedFlag (bool newSelected) { selectedFlag = newSelected; }
 
     void setExpandedFlag (bool newExpanded)
@@ -172,6 +177,7 @@ public:
     void setLaneClickHandler (std::function<void()> handler) { canvas.setLaneClickHandler (std::move (handler)); }
     void setGridSettingsProvider (std::function<GridSettings()> provider) { canvas.setGridSettingsProvider (std::move (provider)); }
     void setPlayheadBeatsProvider (std::function<double()> provider) { canvas.setPlayheadBeatsProvider (std::move (provider)); }
+    void refreshNotes() { canvas.refreshNotes(); }
     void setSelected (bool newSelected) { canvas.setSelectedFlag (newSelected); }
 
     void setExpanded (bool newExpanded);

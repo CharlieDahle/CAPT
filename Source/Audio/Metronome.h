@@ -17,6 +17,7 @@ public:
     void setEnabled (bool shouldBeEnabled) { enabled.store (shouldBeEnabled); }
     bool isEnabled() const { return enabled.load(); }
     void setGain (float newGain) { gain.store (newGain); }
+    float getGain() const { return gain.load(); }
 
     // transportRunning = currentState != Idle. Called once per audio block
     // from AudioEngine, after elapsedSamples for this block is resolved.

@@ -225,6 +225,7 @@ std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
 {
     auto trackXml = std::make_unique<juce::XmlElement> ("MIDI_TRACK");
     writeVolumeAttribute (*trackXml);
+    writeMuteSoloAttributes (*trackXml);
     trackXml->setAttribute ("waveform", (int) waveform.load());
     trackXml->setAttribute ("attack", (double) envelopeState.attackSeconds.load());
     trackXml->setAttribute ("decay", (double) envelopeState.decaySeconds.load());
@@ -249,6 +250,8 @@ std::unique_ptr<juce::XmlElement> MidiTrack::toXml (const juce::File&) const
 void MidiTrack::fromXml (const juce::XmlElement& trackXml, const juce::File&)
 {
     setVolumeFromXml (trackXml.getDoubleAttribute ("volume", 0.8));
+    setMuted (trackXml.getBoolAttribute ("muted", false));
+    setSoloed (trackXml.getBoolAttribute ("soloed", false));
     waveform.store ((OscillatorWaveform) trackXml.getIntAttribute ("waveform", (int) OscillatorWaveform::Sine));
     envelopeState.attackSeconds.store ((float) trackXml.getDoubleAttribute ("attack", 0.01));
     envelopeState.decaySeconds.store ((float) trackXml.getDoubleAttribute ("decay", 0.1));

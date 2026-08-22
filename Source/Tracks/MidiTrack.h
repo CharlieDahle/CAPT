@@ -191,6 +191,8 @@ public:
         pianoRollView.setPlayheadBeatsProvider (std::move (provider));
     }
 
+    void refreshEditorContents() override { pianoRollView.refreshNotes(); }
+
     // Retained (not just forwarded) - needed on the message thread by
     // getLastEventTimeSamples() to convert the last recorded beat position
     // back to samples using the current tempo.

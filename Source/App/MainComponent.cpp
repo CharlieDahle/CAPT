@@ -3,6 +3,24 @@
 #include "../Project/ProjectFile.h"
 #include <iterator>
 
+// Shared by the combo box's onChange handler and loadButtonClicked's reverse
+// lookup below, so there's exactly one place that defines what each combo
+// item id means.
+static const TimeSignature kTimeSignatureOptions[] = { { 4, 4 }, { 3, 4 }, { 2, 4 }, { 6, 8 }, { 5, 4 }, { 7, 8 } };
+
+// Falls back to id 1 (4/4) if the saved signature isn't one of the combo's
+// options - can't happen from this app's own saves, but a hand-edited or
+// future-version project file could have anything in it.
+static int timeSignatureComboId (TimeSignature signature)
+{
+    for (size_t i = 0; i < std::size (kTimeSignatureOptions); ++i)
+        if (kTimeSignatureOptions[i].numerator == signature.numerator
+            && kTimeSignatureOptions[i].denominator == signature.denominator)
+            return (int) i + 1;
+
+    return 1;
+}
+
 MainComponent::MainComponent()
 {
     recordButton.setButtonText ("Record");
@@ -69,13 +87,12 @@ MainComponent::MainComponent()
     timeSignatureBox.setSelectedId (1, juce::dontSendNotification);
     timeSignatureBox.onChange = [this]
     {
-        static const TimeSignature options[] = { { 4, 4 }, { 3, 4 }, { 2, 4 }, { 6, 8 }, { 5, 4 }, { 7, 8 } };
         auto index = timeSignatureBox.getSelectedId() - 1;
 
-        if (index >= 0 && index < (int) std::size (options))
+        if (index >= 0 && index < (int) std::size (kTimeSignatureOptions))
         {
             auto tempo = engine.getTempo();
-            tempo.timeSignature = options[(size_t) index];
+            tempo.timeSignature = kTimeSignatureOptions[(size_t) index];
             engine.setTempo (tempo);
         }
 
@@ -311,7 +328,8 @@ void MainComponent::saveButtonClicked()
         if (file == juce::File())
             return;
 
-        ProjectFile::save (file, tracks);
+        ProjectFile::SessionState session { engine.getTempo(), engine.isMetronomeEnabled(), engine.getMetronomeGain() };
+        ProjectFile::save (file, tracks, session);
     });
 }
 
@@ -327,8 +345,30 @@ void MainComponent::loadButtonClicked()
         if (file == juce::File())
             return;
 
+        ProjectFile::SessionState session;
         ProjectFile::load (file, tracks,
-                            [this] (int index, TrackType desiredType) { replaceTrack (index, desiredType); });
+                            [this] (int index, TrackType desiredType) { replaceTrack (index, desiredType); },
+                            session);
+
+        // fromXml() just wrote straight into each track's data, bypassing
+        // its piano roll's own cached copy - without this, a track whose
+        // type didn't change would keep showing whatever was there before
+        // the load until something unrelated (e.g. pressing Play) happened
+        // to trigger a refresh.
+        for (auto& track : tracks)
+            track->refreshEditorContents();
+
+        engine.setTempo (session.tempo);
+        engine.setMetronomeEnabled (session.metronomeEnabled);
+        engine.setMetronomeGain (session.metronomeGain);
+
+        // Loading changes AudioEngine's state directly - these controls need
+        // to be told separately or they'd keep showing whatever was on
+        // screen before the load, disagreeing with what's actually playing.
+        bpmSlider.setValue (session.tempo.bpm, juce::dontSendNotification);
+        timeSignatureBox.setSelectedId (timeSignatureComboId (session.tempo.timeSignature), juce::dontSendNotification);
+        metronomeButton.setToggleState (session.metronomeEnabled, juce::dontSendNotification);
+        metronomeVolumeSlider.setValue (session.metronomeGain, juce::dontSendNotification);
     });
 }
 

@@ -85,6 +85,7 @@ std::unique_ptr<juce::XmlElement> AudioTrack::toXml (const juce::File& audioFold
 {
     auto trackXml = std::make_unique<juce::XmlElement> ("AUDIO_TRACK");
     writeVolumeAttribute (*trackXml);
+    writeMuteSoloAttributes (*trackXml);
 
     const juce::ScopedLock lock (recordedSamplesLock);
 
@@ -102,6 +103,8 @@ std::unique_ptr<juce::XmlElement> AudioTrack::toXml (const juce::File& audioFold
 void AudioTrack::fromXml (const juce::XmlElement& trackXml, const juce::File& audioFolder)
 {
     setVolumeFromXml (trackXml.getDoubleAttribute ("volume", 0.8));
+    setMuted (trackXml.getBoolAttribute ("muted", false));
+    setSoloed (trackXml.getBoolAttribute ("soloed", false));
 
     auto fileName = trackXml.getStringAttribute ("audioFile");
 

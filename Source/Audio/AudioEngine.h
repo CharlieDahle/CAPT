@@ -67,6 +67,7 @@ public:
     void setMetronomeEnabled (bool shouldBeEnabled) { metronome.setEnabled (shouldBeEnabled); }
     bool isMetronomeEnabled() const { return metronome.isEnabled(); }
     void setMetronomeGain (float newGain) { metronome.setGain (newGain); }
+    float getMetronomeGain() const { return metronome.getGain(); }
 
     // Whichever track's raw rendered output (pre-mute, pre-gain) should be
     // pushed to tap, or nullptr for neither - the audio thread checks this
